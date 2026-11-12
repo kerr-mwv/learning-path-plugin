@@ -1,0 +1,5 @@
+node_modules/
+dist/
+# LearnHarness plugin SDK: obtained separately, never committed.
+.sdk/
+learnharness-plugins-*/

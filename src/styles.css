@@ -1,0 +1,983 @@
+/* Learning Path — Path Hub.
+ * Scoped to this plugin's own roots; host theme variables only, no global resets.
+ * The host view body owns page scrolling, so this file bounds only the chat log. */
+
+.learning-path-view {
+  padding: 16px clamp(12px, 2vw, 28px) 32px;
+  box-sizing: border-box;
+}
+
+.lp-hub {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+/* Header ------------------------------------------------------------------ */
+
+.lp-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border, #e4e4e7);
+}
+
+.lp-title-block {
+  min-width: 14rem;
+}
+
+.lp-title {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.lp-goal {
+  margin: 4px 0 0;
+  max-width: 70ch;
+  color: var(--muted-foreground, var(--foreground));
+  line-height: 1.45;
+}
+
+.lp-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 12px;
+}
+
+.lp-path-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 13rem;
+}
+
+.lp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+}
+
+.lp-field-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted-foreground, var(--foreground));
+}
+
+.lp-select {
+  min-height: 2rem;
+  max-width: 100%;
+  padding: 3px 8px;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--border, #d4d4d8);
+  border-radius: 6px;
+  font: inherit;
+}
+
+.lp-select:focus-visible {
+  outline: 2px solid var(--ring, #6366f1);
+  outline-offset: 2px;
+}
+
+.lp-progress-summary {
+  margin: 0;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  color: var(--muted-foreground, var(--foreground));
+  background: var(--muted, rgba(127, 127, 127, 0.12));
+  white-space: nowrap;
+}
+
+.lp-hub-error {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--destructive, #ef4444);
+  border-left-width: 4px;
+  border-radius: 6px;
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--destructive, #ef4444) 8%, transparent);
+}
+
+/* Layout ------------------------------------------------------------------ */
+
+.lp-hub-body {
+  display: grid;
+  grid-template-columns: minmax(15rem, 0.85fr) minmax(20rem, 1.5fr) minmax(17rem, 1fr);
+  gap: 18px;
+  align-items: start;
+  min-width: 0;
+}
+
+@media (max-width: 1100px) {
+  .lp-hub-body {
+    grid-template-columns: minmax(15rem, 1fr) minmax(20rem, 1.4fr);
+  }
+
+  .lp-inspector-pane {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 760px) {
+  .lp-hub-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lp-inspector-pane {
+    grid-column: auto;
+  }
+}
+
+.lp-tree-pane,
+.lp-architect,
+.lp-inspector {
+  min-width: 0;
+}
+
+.lp-tree-pane,
+.lp-architect {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: clamp(12px, 1.5vw, 20px);
+  border: 1px solid var(--border, #e4e4e7);
+  border-radius: 10px;
+  background: var(--card, var(--background));
+}
+
+.lp-architect-pane[hidden] {
+  display: none;
+}
+
+.lp-pane-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 8px;
+}
+
+.lp-pane-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+}
+
+.lp-muted {
+  color: var(--muted-foreground, var(--foreground));
+  line-height: 1.45;
+}
+
+.lp-empty-state,
+.lp-empty-chat {
+  margin: 0;
+  color: var(--muted-foreground, var(--foreground));
+  line-height: 1.5;
+}
+
+/* Tree -------------------------------------------------------------------- */
+
+.lp-tree-host {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.lp-tree-node {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.lp-tree-node-labels {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+
+.lp-tree-node-title {
+  font-weight: 550;
+}
+
+.lp-badge-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.lp-badge-host,
+.lp-button-host {
+  display: inline-flex;
+  align-items: center;
+}
+
+.lp-tree-chat {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.lp-tree-chat-label {
+  color: var(--muted-foreground, var(--foreground));
+}
+
+/* Architect --------------------------------------------------------------- */
+
+.lp-architect-status {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted-foreground, var(--foreground));
+}
+
+.lp-status-busy {
+  color: var(--chart-3, #f59e0b);
+}
+
+.lp-status-error {
+  color: var(--destructive, #ef4444);
+}
+
+.lp-chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 42vh;
+  min-height: 6rem;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.lp-chat-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.lp-chat-role {
+  font-size: 0.7rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted-foreground, var(--foreground));
+}
+
+.lp-chat-user .lp-chat-text {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--muted, rgba(127, 127, 127, 0.1));
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.lp-chat-assistant .lp-chat-markdown {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lp-chat-reasoning {
+  padding: 8px 12px;
+  border-left: 2px solid var(--border, #e4e4e7);
+  color: var(--muted-foreground, var(--foreground));
+  background: var(--muted, rgba(127, 127, 127, 0.06));
+  border-radius: 0 6px 6px 0;
+}
+
+/* History and live sections are structural only; turns stay flex children of the log. */
+.lp-chat-history,
+.lp-chat-live {
+  display: contents;
+}
+
+.lp-empty-chat[hidden] {
+  display: none;
+}
+
+details.lp-chat-reasoning > summary {
+  cursor: pointer;
+}
+
+.lp-chat-reasoning .lp-chat-text {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.lp-chat-activity {
+  margin: 0;
+  padding: 4px 12px;
+  color: var(--muted-foreground, var(--foreground));
+  font-size: 0.8rem;
+}
+
+.lp-chat-partial {
+  opacity: 0.85;
+}
+
+.lp-upload-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.lp-upload-status {
+  margin: 0;
+  min-width: 0;
+  font-size: 0.8rem;
+  color: var(--muted-foreground, var(--foreground));
+}
+
+.lp-upload-status[data-state="error"] {
+  color: var(--destructive, #ef4444);
+}
+
+.lp-upload-status[data-state="success"] {
+  color: var(--chart-4, #10b981);
+}
+
+.lp-file-input {
+  display: none;
+}
+
+.lp-model-hint {
+  margin: 0;
+  color: var(--muted-foreground, var(--foreground));
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.lp-composer-host {
+  min-width: 0;
+}
+
+/* Inspector --------------------------------------------------------------- */
+
+.lp-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: clamp(12px, 1.5vw, 20px);
+  border: 1px solid var(--border, #e4e4e7);
+  border-radius: 10px;
+  background: var(--card, var(--background));
+}
+
+.lp-inspector-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lp-inspector-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 10px;
+}
+
+.lp-node-goal {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.lp-inspector-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border, #e4e4e7);
+}
+
+.lp-section-title {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted-foreground, var(--foreground));
+}
+
+.lp-source-anchor,
+.lp-artifact-instructions {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.lp-callout {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--chart-2, #0ea5e9);
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--chart-2, #0ea5e9) 8%, transparent);
+}
+
+.lp-callout strong {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.lp-callout p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.lp-link-list,
+.lp-error-list,
+.lp-chat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lp-error-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--muted, rgba(127, 127, 127, 0.1));
+}
+
+.lp-error-active {
+  border-left: 3px solid var(--chart-6, #ef4444);
+}
+
+.lp-error-resolved {
+  opacity: 0.65;
+  border-left: 3px solid var(--chart-4, #10b981);
+}
+
+.lp-error-list span {
+  color: var(--muted-foreground, var(--foreground));
+}
+
+.lp-artifact-justification {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border, #d4d4d8);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--foreground, #18181b) 3%, transparent);
+}
+
+.lp-artifact-justification h4 {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.lp-artifact-justification p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.lp-chat-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--muted, rgba(127, 127, 127, 0.1));
+}
+
+.lp-chat-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Child sessions ----------------------------------------------------------- */
+
+.lp-chat-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lp-chat-row-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.lp-chat-row.lp-chat-missing {
+  border-left: 3px solid var(--chart-6, #ef4444);
+  opacity: 0.85;
+}
+
+.lp-missing-note {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--destructive, #ef4444);
+}
+
+.lp-session-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: min(28rem, 80vw);
+}
+
+.lp-dialog-status {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted-foreground, var(--foreground));
+}
+
+.lp-dialog-status[data-state="success"] {
+  color: var(--chart-4, #10b981);
+}
+
+.lp-dialog-error {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  color: var(--destructive, #ef4444);
+  background: color-mix(in oklab, var(--destructive, #ef4444) 8%, transparent);
+}
+
+.lp-session-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 45vh;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lp-session-picker-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 10px;
+  padding: 7px 9px;
+  border: 1px solid var(--border, #e4e4e7);
+  border-radius: 7px;
+}
+
+.lp-session-picker-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Compact native tool cards ------------------------------------------------ */
+
+.lp-tool-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 5px 8px;
+  border: 1px solid var(--border, #e4e4e7);
+  border-radius: 7px;
+  background: var(--muted, rgba(127, 127, 127, 0.06));
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.lp-tool-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 7px;
+  min-width: 0;
+}
+
+.lp-tool-line strong {
+  font-weight: 600;
+}
+
+.lp-tool-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--chart-2, #0ea5e9);
+}
+
+.lp-tool-card[data-error="true"] .lp-tool-dot {
+  background: var(--destructive, #ef4444);
+}
+
+.lp-tool-detail {
+  min-width: 0;
+  color: var(--muted-foreground, var(--foreground));
+  overflow-wrap: anywhere;
+}
+
+.lp-tool-error {
+  color: var(--destructive, #ef4444);
+  overflow-wrap: anywhere;
+}
+
+/* Error Ledger ------------------------------------------------------------ */
+
+.lp-error-ledger {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lp-error-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lp-error-category {
+  color: var(--foreground);
+}
+
+.lp-error-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: var(--muted, rgba(127, 127, 127, 0.1));
+}
+
+.lp-error-entry-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 4px 8px;
+}
+
+.lp-error-summary {
+  margin: 0;
+  flex: 1 1 10rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.lp-error-meta {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted-foreground, var(--foreground));
+}
+
+.lp-error-note {
+  margin: 0;
+  padding: 5px 8px;
+  border-left: 2px solid var(--chart-2, #0ea5e9);
+  color: var(--muted-foreground, var(--foreground));
+  font-size: 0.85rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.lp-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lp-error-note-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+}
+
+.lp-error-note-input {
+  width: 100%;
+  min-height: 2.6rem;
+  padding: 5px 7px;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--border, #d4d4d8);
+  border-radius: 6px;
+  font: inherit;
+  resize: vertical;
+}
+
+.lp-error-note-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lp-inherited-watchpoints {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 10px;
+  border: 1px dashed color-mix(in oklab, var(--chart-6, #ef4444) 45%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--chart-6, #ef4444) 5%, transparent);
+}
+
+.lp-watchpoint-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lp-watchpoint-inherited {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 3px 8px;
+  padding: 5px 7px;
+  border-left: 3px solid var(--chart-6, #ef4444);
+  border-radius: 5px;
+  background: var(--background, transparent);
+}
+
+.lp-watchpoint-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lp-watchpoint-category {
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.lp-watchpoint-source {
+  font-size: 0.75rem;
+  color: var(--muted-foreground, var(--foreground));
+}
+
+/* Advisory pivot banner --------------------------------------------------- */
+
+.lp-pivot-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lp-pivot-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in oklab, var(--chart-3, #f59e0b) 45%, transparent);
+  border-left: 3px solid var(--chart-3, #f59e0b);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--chart-3, #f59e0b) 7%, transparent);
+}
+
+.lp-pivot-title {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.lp-pivot-kicker {
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted-foreground, var(--foreground));
+}
+
+.lp-pivot-heading {
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.lp-pivot-rationale,
+.lp-pivot-note {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.lp-pivot-note {
+  font-size: 0.8rem;
+  color: var(--muted-foreground, var(--foreground));
+}
+
+.lp-pivot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Settings page ----------------------------------------------------------- */
+
+.learning-path-settings {
+  padding: 16px clamp(12px, 2vw, 28px) 32px;
+  box-sizing: border-box;
+}
+
+.lp-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-width: 78ch;
+}
+
+.lp-settings-title {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.lp-settings-status {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--muted, rgba(127, 127, 127, 0.12));
+  white-space: pre-wrap;
+}
+
+.lp-settings-status[data-state="error"] {
+  color: var(--destructive, #ef4444);
+  background: color-mix(in oklab, var(--destructive, #ef4444) 8%, transparent);
+}
+
+.lp-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border, #e4e4e7);
+}
+
+.lp-settings-heading {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+}
+
+.lp-settings-subheading {
+  margin: 8px 0 0;
+  font-size: 0.82rem;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--muted-foreground, var(--foreground));
+}
+
+.lp-settings-rows,
+.lp-architect-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lp-artifact-catalog {
+  padding: 8px 10px;
+  border: 1px dashed var(--border, #d4d4d8);
+  border-radius: 8px;
+}
+
+.lp-artifact-catalog summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.lp-artifact-option {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border, #e4e4e7);
+}
+
+.lp-artifact-option-title {
+  margin: 0 0 3px;
+  font-size: 0.88rem;
+  font-weight: 650;
+}
+
+.lp-artifact-option p {
+  margin: 0 0 4px;
+  line-height: 1.45;
+}
+
+.lp-settings-path-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lp-settings-path-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #e4e4e7);
+  border-radius: 8px;
+}
+
+.lp-settings-path-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lp-settings-path-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.lp-dialog-title {
+  margin: 0 0 8px;
+  font-size: 1rem;
+  font-weight: 650;
+}
+
+.lp-dialog-text {
+  margin: 0 0 8px;
+  line-height: 1.5;
+}
+
+.lp-dialog-safe {
+  padding: 7px 9px;
+  border-left: 3px solid var(--chart-4, #10b981);
+  border-radius: 5px;
+  background: color-mix(in oklab, var(--chart-4, #10b981) 7%, transparent);
+}
+
+.lp-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
