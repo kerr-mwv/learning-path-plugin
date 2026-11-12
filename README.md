@@ -46,6 +46,24 @@ a glossary of every term the plugin uses.
 
 ## Installation
 
+### Download a release (no build tools needed)
+
+Requirements: LearnHarness 0.6.0 or later.
+
+1. Download `learning-path-<version>.zip` from the
+   [latest release](https://github.com/kerr-mwv/learning-path-plugin/releases/latest).
+2. Open **Settings → Community plugins** in LearnHarness to find your plugins
+   directory.
+3. Unzip the archive into that directory. It contains `learning-path/dist/`, so
+   you end up with `<plugins-directory>/learning-path/dist/manifest.json`.
+4. Refresh Community plugins and enable **Learning Paths**.
+
+To update, delete `learning-path/dist/` and unzip the new release in its place.
+Never delete `learning-path/data/`: it holds your paths and settings. Restart
+LearnHarness to load the new version.
+
+### Build from source
+
 Requirements: LearnHarness 0.6.0 or later, Node.js 24 and npm.
 
 ```sh
