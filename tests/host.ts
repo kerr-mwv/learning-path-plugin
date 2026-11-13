@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import type {
   ChatListItem,
+  GraphNode,
   ChatRecord,
   ModelCatalogResponse,
   PluginAgentDefinition,
@@ -98,6 +99,7 @@ export interface HostOptions {
   readonly dataDirectory?: string;
   readonly catalog?: ModelCatalogResponse;
   readonly chats?: readonly ChatRecord[];
+  readonly graphNodes?: readonly GraphNode[];
 }
 
 export function createHost(options: HostOptions = {}): TestHost {
@@ -234,8 +236,8 @@ export function createHost(options: HostOptions = {}): TestHost {
       const found = chats.get(id);
       return found ? structuredClone(found) : null;
     },
-    graph: () => ({ nodes: [], chains: [] }) as never,
-    readGraphFile: () => [] as never,
+    graph: () => ({ nodes: structuredClone(options.graphNodes ?? []), propositions: structuredClone(options.graphNodes ?? []), chains: [] }) as never,
+    readGraphFile: (name) => structuredClone(name === "nodes.jsonl" ? options.graphNodes ?? [] : []) as never,
   };
 
   const ctx = {

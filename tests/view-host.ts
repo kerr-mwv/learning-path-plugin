@@ -406,6 +406,8 @@ export function createViewFixture(options: FixtureOptions = {}): ViewFixture {
     calls.push({ name, input });
     const value = (input ?? {}) as AnyProps;
     switch (name) {
+      case "knowledge.inspect":
+        return Promise.resolve({ links: [], available: true, notice: "Graph presence is not evidence of mastery." } as T);
       case "paths.list":
         return Promise.resolve({
           paths: [...paths.values()].map(summarize),
