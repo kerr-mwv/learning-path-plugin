@@ -67,7 +67,7 @@ test("Architect definition is reconstructed on activation and released on cleanu
   assert.ok(definition);
   assert.deepEqual(
     (definition.tools ?? []).map((tool) => tool.name),
-    ["list_uploaded_sources", "read_uploaded_source_chunk", "get_learning_path", "save_learning_path", "save_learning_path_json"],
+    ["list_uploaded_sources", "read_uploaded_source_chunk", "get_learning_path", "check_existing_knowledge", "save_learning_path", "save_learning_path_json"],
   );
   assert.match(definition.instructions, /Learning Path Architect/);
   assert.deepEqual(definition.model, {

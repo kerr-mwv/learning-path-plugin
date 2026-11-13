@@ -31,6 +31,7 @@ import {
 } from "../domain.ts";
 import { EVENT_ARCHITECT_CHANGED, EVENT_PATHS_CHANGED } from "../topics.ts";
 import { createArchitectPane } from "./architect-pane.ts";
+import { openDraftKnowledgeDialog } from "./draft-knowledge-dialog.ts";
 import { createNodeInspector } from "./node-inspector.ts";
 import type { NodeInspectorChange } from "./node-inspector.ts";
 import type { ErrorLedgerChange } from "./error-ledger.ts";
@@ -138,7 +139,8 @@ export function mountPathHub(
 
   const createHost = element(document, "span", "lp-button-host");
   const refineHost = element(document, "span", "lp-button-host");
-  headerActions.append(createHost, refineHost);
+  const draftKnowledgeHost = element(document, "span", "lp-button-host");
+  headerActions.append(createHost, refineHost, draftKnowledgeHost);
   const summary = element(document, "p", "lp-progress-summary");
   summary.setAttribute("aria-live", "polite");
   headerActions.append(summary);
@@ -185,6 +187,10 @@ export function mountPathHub(
   const expanded = new Map<string, boolean>();
   const contentCache = new Map<string, ContentEntry>();
   const handles: PluginWidgetHandle<unknown>[] = [];
+  handles.push(ctx.ui.mountButton(draftKnowledgeHost, {
+    label: "Check draft knowledge", variant: "outline", size: "sm",
+    onClick: () => { if (!signal.aborted && !disposed) openDraftKnowledgeDialog(ctx, signal); },
+  }, { signal }));
 
   const pane = createArchitectPane(ctx, architectContainer, signal);
   const launcher = createSessionLauncher(ctx, { host: options.sessionHost });
@@ -738,7 +744,10 @@ export function mountPathHub(
   const offNotification = ctx.onNotification((event) => {
     if (signal.aborted || disposed) return;
     if (event.topic === EVENT_PATHS_CHANGED) {
-      const data = event.data as { id?: unknown; created?: unknown } | undefined;
+      const data = event.data as { id?: unknown; created?: unknown; knowledgeChanged?: unknown } | undefined;
+      // Knowledge panels own these refreshes. Rebuilding the inspector here
+      // would discard other candidates and unsaved learner review choices.
+      if (data?.knowledgeChanged === true) return;
       if (data?.created === true && typeof data.id === "string") createdPathId = data.id;
       void refreshAll();
       return;

@@ -2,6 +2,7 @@
  *
  * Owns exactly these files:
  *   learning-paths.json      versioned path records
+ *   knowledge-links.json     confirmed graph associations and rejected matches
  *   settings.json            versioned plugin settings
  *   architect.json           chosen Architect model (needed to re-register)
  *   sources/<sourceId>.md    converted learner uploads (UUID names only)
@@ -13,6 +14,8 @@
  * version and every record: corrupt JSON, invalid records and newer schema versions
  * throw instead of being overwritten, because the learner's data cannot be rebuilt.
  */
+import { parseKnowledgeState } from "./knowledge.ts";
+import type { KnowledgeState } from "./knowledge.ts";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -33,6 +36,7 @@ import type {
 } from "./domain.ts";
 
 export const STORE_SCHEMA_VERSION = 1;
+export const KNOWLEDGE_FILE = "knowledge-links.json";
 export const LEARNING_PATHS_FILE = "learning-paths.json";
 export const SETTINGS_FILE = "settings.json";
 export const ARCHITECT_FILE = "architect.json";
@@ -342,6 +346,8 @@ export interface LearningPathStore {
   /** Validate and atomically create/update one path, keyed by path id. */
   savePath(value: unknown): LearningPath;
   deletePath(id: string): boolean;
+  knowledge(): KnowledgeState;
+  saveKnowledge(value: unknown): KnowledgeState;
   settings(): PluginSettings;
   saveSettings(value: unknown): PluginSettings;
   /** The explicit model the Path Architect definition is registered with. */
@@ -373,6 +379,20 @@ export function openLearningPathStore(dataDirectory: string): LearningPathStore 
   const settingsFilename = path.join(directory, SETTINGS_FILE);
   const architectFilename = path.join(directory, ARCHITECT_FILE);
   const sourcesDirectory = path.join(directory, SOURCES_DIRECTORY);
+  const knowledgeFilename = path.join(directory, KNOWLEDGE_FILE);
+  const rawKnowledge = readJsonFile(knowledgeFilename);
+  let knowledgeRevision = 0;
+  let knowledgeState: KnowledgeState = { links: [], rejected: [] };
+  if (rawKnowledge !== undefined) {
+    const record = asRecord(rawKnowledge, knowledgeFilename);
+    readSchemaVersion(record, knowledgeFilename);
+    knowledgeRevision = readRevision(record, knowledgeFilename);
+    try {
+      knowledgeState = parseKnowledgeState(record.knowledge);
+    } catch (cause) {
+      throw new StoreError("corrupt", `Invalid knowledge links at ${knowledgeFilename}. No data was changed.`, { cause });
+    }
+  }
 
   let pathsState = loadPathsFile(pathsFilename);
   let settingsState = loadSettingsFile(settingsFilename);
@@ -452,8 +472,18 @@ export function openLearningPathStore(dataDirectory: string): LearningPathStore 
     pathsState = { paths, revision: pathsState.revision + 1 };
   };
 
+  const saveKnowledge = (value: unknown): KnowledgeState => {
+    const knowledge = parseKnowledgeState(value);
+    atomicWrite(knowledgeFilename, serialize({ schemaVersion: STORE_SCHEMA_VERSION, revision: knowledgeRevision + 1, knowledge }));
+    knowledgeState = knowledge;
+    knowledgeRevision += 1;
+    return knowledge;
+  };
+
   return {
     directory,
+    knowledge: () => structuredClone(knowledgeState),
+    saveKnowledge,
 
     paths: () => pathsState.paths,
 
@@ -474,9 +504,16 @@ export function openLearningPathStore(dataDirectory: string): LearningPathStore 
 
     deletePath(id) {
       const next = pathsState.paths.filter((candidate) => candidate.id !== id);
-      if (next.length === pathsState.paths.length) return false;
-      writePaths(next);
-      return true;
+      const changed = next.length !== pathsState.paths.length;
+      if (changed) writePaths(next);
+      // These files are individually atomic, not a multi-file transaction. A
+      // retry must clean associations even if a prior path write already landed.
+      const links = knowledgeState.links.filter(link => link.pathId !== id);
+      const rejected = knowledgeState.rejected.filter(entry => entry.pathId !== id);
+      if (links.length !== knowledgeState.links.length || rejected.length !== knowledgeState.rejected.length) {
+        saveKnowledge({ links, rejected });
+      }
+      return changed;
     },
 
     settings: () => settingsState.settings,

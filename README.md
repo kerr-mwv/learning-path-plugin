@@ -103,7 +103,7 @@ credential files inside the package.
 The build writes only `dist/`. It refuses a symlinked `dist/` and a misplaced
 `dist/data/`, and never touches a sibling `data/` directory. At runtime the
 plugin writes through the host-provided `ctx.dataDirectory`:
-`learning-paths.json`, `settings.json`, `architect.json` and `sources/`. It leaves
+`learning-paths.json`, `knowledge-links.json`, `settings.json`, `architect.json` and `sources/`. It leaves
 host-reserved `agents/`, `tasks/` and `usage.jsonl` alone, refuses newer or
 corrupt records instead of wiping them, and never deletes native chats or
 Knowledge Graph records.
@@ -150,6 +150,65 @@ Knowledge Graph records.
 
 There is deliberately **no scheduling**: no hours, days, streaks or completion
 dates. Any node can be opened at any time.
+
+## Existing knowledge integration
+
+The Node Inspector's **Linked knowledge** section can associate a curriculum unit
+with multiple native graph propositions, and reuse the same proposition across
+units and paths. Associations are separate from both curriculum IDs and graph IDs.
+
+- **Show confirmed knowledge** displays freshly resolved statements, recorded
+  aliases/provenance, relationship (`covers`, `requires`, `related`), rationale,
+  origin and confirmation time. Missing propositions remain visible as unresolved
+  associations; **Unlink** never deletes native knowledge or chats.
+- **Search propositions** finds a recorded proposition by phrase or ID for manual
+  review. **Check existing knowledge** suggests related propositions for the
+  selected unit; **Check whole path** groups suggestions by unit and confirms each
+  against that unit's ID. Inspect the precise statement and provenance, choose a
+  relationship and optionally assess coverage as partial/full, then explicitly
+  confirm or reject. Coverage is a learner assessment, **not mastery**.
+- **Check draft knowledge** in the Path Hub checks a proposed unit's title and
+  goal before saving a path. Draft results are read-only; save the path first to
+  persist links or rejections. The Architect also has a read-only
+  `check_existing_knowledge` tool for draft or saved-path checks and can discuss
+  confirmed links returned by `get_learning_path`.
+
+Retrieval is deterministic local **word/recorded-alias matching**, not embeddings
+or a semantic-equivalence classifier. Statements and aliases outweigh short names.
+Unrecorded paraphrases may be missed; homonyms may appear. All candidates start
+as related context with unassessed coverage. Nothing is linked, skipped,
+consolidated or reordered automatically. No additional model call, transcript
+retrieval, graph mutation or private navigation route is used.
+
+Discovery scans at most 10,000 merged propositions and checks at most 100 units
+per request, returning at most 10 candidates per unit. Manual search returns at
+most 20 results from the same scan window. The SDK returns a complete graph
+snapshot (there is no paginated graph API), so these limits bound plugin matching
+and result counts, not the host's initial graph read. The Architect receives a
+smaller preview: up to 10 units, 12 candidates, 2,000 characters per statement,
+5 aliases and 5 provenance entries. The inspector shows at most 20 provenance
+entries per proposition and reports any remaining entries.
+
+Confirmed links and rejected-match fingerprints live in versioned, atomic
+`knowledge-links.json` under `ctx.dataDirectory`. Missing sidecars default to
+empty state: existing version-1 path files need no rewrite or lossy migration.
+Corrupt/newer sidecars are refused. Rejected matches stay suppressed until the
+unit's title/goal/source anchor or proposition statement/aliases change; new
+provenance alone does not resurface them. Confirmation rechecks current content
+and refuses stale reviews. Path deletion removes that path's plugin-owned links
+and rejections only.
+
+### SDK compatibility
+
+This integration uses public `ctx.learning.graph().propositions` (the merged
+proposition projection, not raw append-only `nodes.jsonl` or derived canvas
+nodes), `ctx.handle`/`ctx.call`, `ctx.ui.mountButton`/`openDialog`, and existing
+plugin events. It does not expand the existing native-chat adapter's host
+coupling. The declarations and provenance shape (`chatId`, `messageId`) were
+checked against LearnHarness **v0.6.0** (`a63664767ebdd7e5af08f7f501b720e02b2ddc32`)
+and the public host source at `cb25c8e49b85eed9e78315584731cad73a0118a6`.
+The minimum app version remains 0.6.0. Future SDK changes require rechecking;
+this is not a guarantee for arbitrary forks or modified host builds.
 
 ## Node taxonomy
 
@@ -223,6 +282,7 @@ typecheck` explains this if the folder is missing.
 
 | Suite | Covers |
 | --- | --- |
+| `knowledge`, `knowledge-panel` | Local retrieval, stale review, rejection persistence, safe sidecar defaults/deletion, manual/whole-path/draft review and disposal |
 | `domain`, `framework` | Schema validation, prompt/brief invariants, no scheduling language |
 | `store` | Atomic writes, corrupt/future-version refusal, source dedupe |
 | `backend`, `diagnostics`, `session-rpc` | Architect lifecycle, RPC writes, watchpoints, pivots, settings, deletion |

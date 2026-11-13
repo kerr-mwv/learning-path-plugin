@@ -981,3 +981,32 @@ details.lp-chat-reasoning > summary {
   justify-content: flex-end;
   gap: 8px;
 }
+
+/* Read-only native knowledge review ---------------------------------------- */
+.lp-knowledge-results {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.lp-knowledge-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  margin-block: 8px;
+  border: 1px solid var(--border, #e4e4e7);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.lp-knowledge-card p { margin: 0; }
+.lp-knowledge-card textarea { min-height: 4rem; resize: vertical; }
+.lp-knowledge-card summary { cursor: pointer; }
+.lp-knowledge-card summary:focus-visible {
+  outline: 2px solid var(--ring, #6366f1);
+  outline-offset: 2px;
+}
+.lp-knowledge-card .lp-select:disabled { opacity: 0.6; cursor: not-allowed; }

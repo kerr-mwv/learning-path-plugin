@@ -16,6 +16,7 @@
  * runs, `cleanup` releases handlers, subscriptions, the bridge and the definition,
  * and no tool writes after the signal aborts.
  */
+import { createKnowledgeService } from "./knowledge-service.ts";
 import { randomUUID } from "node:crypto";
 import type {
   ModelCatalogResponse,
@@ -491,6 +492,19 @@ export function activate(ctx: PluginBackendContext): void {
     return { path: store.path(id) };
   });
 
+  const knowledge = createKnowledgeService(ctx, store);
+  handle("knowledge.inspect", knowledge.inspect);
+  handle("knowledge.discover", knowledge.discover);
+  handle("knowledge.search", knowledge.search);
+  handle("knowledge.preview", knowledge.fingerprint);
+  for (const action of ["link", "unlink", "reject"] as const) {
+    handle(`knowledge.${action}`, (input) => {
+      const result = knowledge.mutate(input, action);
+      emit(EVENT_PATHS_CHANGED, { knowledgeChanged: true });
+      return result;
+    });
+  }
+
   // ---- Settings -----------------------------------------------------------
 
   handle("settings.get", () => ({ settings: store.settings() }));
@@ -670,6 +684,7 @@ export function activate(ctx: PluginBackendContext): void {
     const pathId = readText(object(input, "paths.delete").pathId, "pathId", { max: 128 });
     const path = store.path(pathId);
     if (!path) {
+      store.deletePath(pathId); // Retry sidecar cleanup after an interrupted multi-file deletion.
       return {
         deleted: false,
         pathId,

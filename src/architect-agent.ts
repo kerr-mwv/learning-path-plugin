@@ -13,6 +13,7 @@
  *   validated write path for a path, and it links the record to the conversation
  *   that produced it.
  */
+import { createKnowledgeService } from "./knowledge-service.ts";
 import { randomUUID } from "node:crypto";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type {
@@ -390,7 +391,9 @@ function getLearningPathTool(
         return textResult({ paths: known }, JSON.stringify({ paths: known }));
       }
       const outline = pathOutline(path);
-      return textResult({ path: outline }, JSON.stringify(outline));
+      const confirmedKnowledgeLinks = options.store.knowledge().links.filter(link => link.pathId === path!.id).slice(0, 30)
+        .map(link => ({ ...link, rationale: link.rationale.slice(0, 300) }));
+      return textResult({ path: outline, confirmedKnowledgeLinks }, JSON.stringify({ ...outline, confirmedKnowledgeLinks }));
     },
   };
 }
@@ -515,6 +518,37 @@ function uploadedSources(path: LearningPath): readonly UploadedSourceReference[]
   return path.sourceSpine.supplements ?? [];
 }
 
+/** Read-only and bounded: the Architect can discover, never confirm for the learner. */
+function checkExistingKnowledgeTool(ctx: PluginBackendContext, options: ArchitectAgentOptions): PluginAgentTool {
+  return {
+    name: "check_existing_knowledge",
+    description: "Find locally recorded propositions related to a draft unit (draft: title/goal) or saved path (pathId, optional nodeId). Word/alias matches are unassessed, not semantic equivalence or mastery. Ask the learner to inspect and confirm links in Check existing knowledge. Never skip or consolidate units based on matches.",
+    parameters: objectSchema({
+      pathId: { type: "string" }, nodeId: { type: "string" },
+      draft: objectSchema({ title: { type: "string", maxLength: 300 }, goal: { type: "string", maxLength: 4000 } }, ["title", "goal"]),
+    }),
+    execute: async (_id, args, signal) => {
+      assertLive(ctx, signal);
+      try {
+        const found = createKnowledgeService(ctx, options.store).discover(args);
+        let remaining = 12;
+        const result = { ...found, units: found.units.slice(0, 10).map(unit => {
+          const candidates = unit.candidates.slice(0, Math.min(3, remaining)).map(candidate => ({ ...candidate,
+            proposition: { ...candidate.proposition, statement: candidate.proposition.statement.slice(0, 2000),
+              aliases: candidate.proposition.aliases.slice(0, 5).map(alias => alias.slice(0, 200)),
+              provenance: candidate.proposition.provenance.slice(0, 5) },
+          }));
+          remaining -= candidates.length;
+          return { ...unit, candidates };
+        }), notice: `${found.notice} Architect preview: up to 10 units, 12 candidates total, 2,000 characters per statement, 5 aliases and 5 provenance entries. Use the inspector for complete review.` };
+        return textResult(result, JSON.stringify(result));
+      } catch (error) {
+        return errorResult(error instanceof Error ? error.message : "Could not inspect graph knowledge.");
+      }
+    },
+  };
+}
+
 /** Build the definition the host registers; exposed for lifecycle assertions. */
 export function buildArchitectDefinition(
   ctx: PluginBackendContext,
@@ -530,6 +564,7 @@ export function buildArchitectDefinition(
       listUploadedSourcesTool(ctx, options),
       readUploadedSourceChunkTool(ctx, options),
       getLearningPathTool(ctx, options),
+      checkExistingKnowledgeTool(ctx, options),
       saveLearningPathTool(ctx, options),
       saveLearningPathTool(ctx, options, true),
     ],

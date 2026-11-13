@@ -26,6 +26,7 @@ import type {
 } from "../domain.ts";
 import type { ChildSessionKind } from "../domain.ts";
 import type { SessionStatus } from "../session-types.ts";
+import { createKnowledgePanel } from "./knowledge-panel.ts";
 import { createErrorLedger } from "./error-ledger.ts";
 import type { ErrorLedgerChange } from "./error-ledger.ts";
 import { createPivotBanner } from "./pivot-banner.ts";
@@ -118,10 +119,13 @@ export function createNodeInspector(
     selectNode: options.selectNode,
   });
 
+  let disposeKnowledge: (() => void) | null = null;
   let handles: PluginWidgetHandle<unknown>[] = [];
   let disposed = false;
 
   const clear = (): void => {
+    disposeKnowledge?.();
+    disposeKnowledge = null;
     for (const handle of handles.reverse()) handle.dispose();
     handles = [];
     root.replaceChildren();
@@ -231,6 +235,9 @@ export function createNodeInspector(
       }
       interleaving.append(list);
     }
+
+    const knowledge = section("Linked knowledge");
+    disposeKnowledge = createKnowledgePanel(ctx, knowledge, signal, path, node);
 
     const artifact = section("Generative artifact");
     const effective = effectiveArtifact(path, node);
