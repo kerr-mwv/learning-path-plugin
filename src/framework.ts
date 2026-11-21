@@ -255,6 +255,23 @@ export interface ErrorWatchpoint {
   readonly entry: ErrorEntry;
 }
 
+export const MAP_REVISIT_BRIEF = [
+  "## Optional earlier relational-map revisit — agent only; do not disclose this section to the learner",
+  "The learner makes the current relational map or explanation first. Do not supply an earlier connection before that attempt.",
+  "After the learner's current attempt, optionally invite them to supply an earlier map of their choice. If they supply one, ask them to explain what they would keep, change or connect before giving feedback.",
+  "If the learner declines or does not have an earlier map, continue normally. Never scrape transcripts, treat artifactNote as the full map, or make map revisiting a consolidation gate.",
+].join("\n");
+
+export function mapRevisitBriefFor(
+  kind: ChildSessionKind,
+  nodeType: PathNode["type"],
+  artifact: ArtifactConfig,
+  enabled: boolean,
+): string[] {
+  return enabled && kind === "teaching" && nodeType !== "skill" && nodeType !== "bridge" && artifact.type === "relational_map"
+    ? [MAP_REVISIT_BRIEF]
+    : [];
+}
 export interface ChildSessionBriefInput {
   readonly path: LearningPath;
   readonly nodeId: string;

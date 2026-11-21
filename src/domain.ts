@@ -253,6 +253,8 @@ export interface PluginSettings {
   readonly architect?: ArchitectPreferences;
   /** Experimental read-only graph context for teaching/practice; absent is off. */
   readonly graphContextEnabled?: boolean;
+  /** Experimental learner-first revisit of earlier relational maps; absent is off. */
+  readonly mapRevisitEnabled?: boolean;
 }
 
 export interface ValidationIssue {
@@ -722,10 +724,14 @@ function readPluginSettingsValue(value: unknown): PluginSettings {
   const graphContextEnabled = record.graphContextEnabled === undefined
     ? undefined
     : readBoolean(record.graphContextEnabled, `${path}.graphContextEnabled`);
+  const mapRevisitEnabled = record.mapRevisitEnabled === undefined
+    ? undefined
+    : readBoolean(record.mapRevisitEnabled, `${path}.mapRevisitEnabled`);
   return {
     artifactDefaults,
     ...(architect === undefined ? {} : { architect }),
     ...(graphContextEnabled === undefined ? {} : { graphContextEnabled }),
+    ...(mapRevisitEnabled === undefined ? {} : { mapRevisitEnabled }),
   };
 }
 

@@ -214,6 +214,29 @@ test("experimental graph context toggle defaults off, saves, and restores after 
     fixture.restore();
   }
 });
+test("experimental map revisit toggle defaults off, saves, and restores after failure", async () => {
+  const fixture = createViewFixture();
+  try {
+    mountSettingsPage(fixture.context, fixture.root, fixture.context.signal);
+    await fixture.flush();
+    const toggle = () => artifactRow(liveRows(fixture, "map-revisit-enabled"), "map-revisit-enabled");
+    assert.equal(toggle().value, false);
+    assert.match(toggle().description, /relational-map|continue normally/i);
+    await toggle().onChange(true);
+    await fixture.flush();
+    assert.equal(fixture.settings.mapRevisitEnabled, true);
+    assert.equal(toggle().value, true);
+    const originalCall = fixture.context.call;
+    fixture.context.call = async () => { throw new Error("disk unavailable"); };
+    await toggle().onChange(false);
+    await fixture.flush();
+    assert.equal(toggle().value, true);
+    assert.match(fixture.root.textContent ?? "", /Could not save settings: disk unavailable/);
+    fixture.context.call = originalCall;
+  } finally {
+    fixture.restore();
+  }
+});
 test("settings page exports a path as JSON and Markdown", async () => {
   const path = makePath();
   const fixture = createViewFixture({ paths: [path] });
@@ -263,17 +286,20 @@ test("graph toggle is disabled while its save is in flight", async () => {
     mountSettingsPage(fixture.context, fixture.root, fixture.context.signal);
     await fixture.flush();
     const toggle = () => artifactRow(liveRows(fixture, "graph-context-enabled"), "graph-context-enabled");
+    const mapToggle = () => artifactRow(liveRows(fixture, "map-revisit-enabled"), "map-revisit-enabled");
     const originalCall = fixture.context.call;
     let finish!: () => void;
     const gate = new Promise<void>(resolve => { finish = resolve; });
     fixture.context.call = async (...args) => { await gate; return originalCall(...args); };
     const pending = toggle().onChange(true);
     assert.equal(toggle().disabled, true);
+    assert.equal(mapToggle().disabled, true);
     assert.match(fixture.root.textContent ?? "", /Saving/);
     finish();
     await pending;
     await fixture.flush();
     assert.equal(toggle().disabled, false);
+    assert.equal(mapToggle().disabled, false);
     assert.equal(toggle().value, true);
   } finally { 
     fixture.restore(); 

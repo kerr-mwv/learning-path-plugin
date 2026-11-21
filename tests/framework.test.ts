@@ -189,6 +189,18 @@ test("a node with no unresolved errors still tells the session to probe", () => 
   assert.deepEqual(holistic.watchpoints, []);
 });
 
+test("map revisit guidance never enters the learner-visible launch brief", () => {
+  const path = { ...makePath(), artifactDefault: null };
+  const brief = buildChildSessionBrief({
+    path,
+    nodeId: "n-contrast",
+    kind: "teaching",
+    settings: { artifactDefaults: {}, mapRevisitEnabled: true },
+  });
+  assert.equal(brief.artifact.type, "relational_map");
+  assert.doesNotMatch(brief.text, /earlier map|map revisit|keep, change or connect/i);
+});
+
 test("graph context in agent briefs is opt-in, relevant, bounded and explicitly withheld until an attempt", () => {
   const path = makePath();
   const node = nodeOf(path, "n-contrast");

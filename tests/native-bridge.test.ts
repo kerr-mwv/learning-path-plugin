@@ -115,6 +115,62 @@ test("instructions exist, and native tools are injected only for linked chats of
   }
 });
 
+test("map revisit guidance reaches only enabled relational-map teaching briefs and teacher instructions", async () => {
+  const directory = temporaryDirectory();
+  const path = { ...makePath(), artifactDefault: null };
+  openLearningPathStore(directory).savePath(path);
+  const host = createHost({ dataDirectory: directory, chats: [chat("chat-map"), chat("chat-concept"), chat("practice", "practice")] });
+  try {
+    await host.call("settings.save", { artifactDefaults: {}, mapRevisitEnabled: true });
+    await host.call("sessions.link", {
+      pathId: path.id,
+      nodeId: "n-contrast",
+      chatId: "chat-map",
+      kind: "teaching",
+    });
+    const teacher = host.nativeTools("chat-map", "teacher");
+    const brief = await runTool(teacher, "learning_path_get_brief", {});
+    assert.match(brief.text, /Optional earlier relational-map revisit/);
+    assert.match(brief.text, /keep, change or connect/i);
+    assert.match(brief.text, /If the learner does not have an earlier map|continue normally/i);
+    assert.doesNotMatch((await runTool(teacher, "learning_path_get_brief", {})).text, /artifactNote is the full map/i);
+
+    await host.call("sessions.link", {
+      pathId: path.id,
+      nodeId: "n-contrast",
+      chatId: "practice",
+      kind: "practice",
+    });
+    const practice = await runTool(host.nativeTools("practice", "practice"), "learning_path_get_brief", {});
+    assert.doesNotMatch(practice.text, /Optional earlier relational-map revisit/);
+    const prober = await runTool(host.nativeTools("chat-map", "prober"), "learning_path_get_brief", {});
+    assert.doesNotMatch(prober.text, /Optional earlier relational-map revisit/);
+    await host.call("sessions.link", {
+      pathId: path.id,
+      nodeId: "n-concept",
+      chatId: "chat-concept",
+      kind: "teaching",
+    });
+    const nonRelational = await runTool(host.nativeTools("chat-concept", "teacher"), "learning_path_get_brief", {});
+    assert.doesNotMatch(nonRelational.text, /Optional earlier relational-map revisit/);
+
+    for (const nodeType of ["skill", "bridge"]) {
+      const nodeId = `n-${nodeType}`;
+      await host.call("paths.updateNode", { pathId: path.id, nodeId, artifactType: "relational_map" });
+      await host.call("sessions.unlink", { pathId: path.id, nodeId: "n-contrast", chatId: "chat-map" });
+      await host.call("sessions.link", { pathId: path.id, nodeId, chatId: "chat-map", kind: "teaching" });
+      const overridden = await runTool(teacher, "learning_path_get_brief", {});
+      assert.match(overridden.text, /Recommended: .*\(relational_map\)/);
+      assert.doesNotMatch(overridden.text, /Optional earlier relational-map revisit/, nodeType);
+      await host.call("sessions.unlink", { pathId: path.id, nodeId, chatId: "chat-map" });
+      await host.call("sessions.link", { pathId: path.id, nodeId: "n-contrast", chatId: "chat-map", kind: "teaching" });
+    }
+
+    await host.call("settings.save", { artifactDefaults: {}, mapRevisitEnabled: false });
+    assert.equal(host.instructions.some((entry) => /learner-first.*map revisit/i.test(entry.text)), false);
+    assert.doesNotMatch((await runTool(teacher, "learning_path_get_brief", {})).text, /Optional earlier relational-map revisit/);
+  } finally { close(host, directory); }
+});
 test("deleted native chats stop injection even while the plugin link remains", async () => {
   const { host, directory } = hostWithPath([chat("chat-1")]);
   try {

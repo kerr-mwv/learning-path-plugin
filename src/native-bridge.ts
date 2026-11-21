@@ -29,7 +29,7 @@ import {
 import type { ChildSessionKind, LearningPath, PathNode } from "./domain.ts";
 import { GRAPH_AGENT_RULES, readGraphPropositions, searchGraph } from "./graph-context.ts";
 import { GRAPH_SEARCH_TOOL_NAME } from "./tool-names.ts";
-import { buildChildSessionBrief } from "./framework.ts";
+import { buildChildSessionBrief, mapRevisitBriefFor } from "./framework.ts";
 import {
   appendError,
   appendPivot,
@@ -188,15 +188,22 @@ function briefTool(
         return errorResult("This session is no longer linked to a Learning Path node.");
       }
       const { path, node, kind } = located;
+      const settings = store.settings();
       const brief = buildChildSessionBrief({
         path,
         nodeId: node.id,
         kind,
-        settings: store.settings(),
-        ...(agent !== "prober" && kindMatchesAgent(kind, agent) && store.settings().graphContextEnabled === true
+        settings,
+        ...(agent !== "prober" && kindMatchesAgent(kind, agent) && settings.graphContextEnabled === true
           ? { graphPropositions: readGraphPropositions(ctx), currentChatId: chatId }
           : {}),
       });
+      const mapRevisitLines = mapRevisitBriefFor(
+        kind,
+        node.type,
+        brief.artifact,
+        agent === "teacher" && settings.mapRevisitEnabled === true,
+      );
       const catalog = artifactCatalogEntry(brief.artifact.type);
       const anchor = formatSourceAnchor(node.sourceAnchor);
       const details = {
@@ -225,7 +232,7 @@ function briefTool(
         })),
         unresolvedErrors: node.errors.filter((entry) => !entry.resolved).length,
       };
-      return textResult(details, brief.text);
+      return textResult(details, [brief.text, ...mapRevisitLines].filter(Boolean).join("\n\n"));
     },
   };
 }
@@ -567,12 +574,12 @@ export function registerNativeBridge(
   };
   const unregisterTools = ctx.registerTools(contribution);
   let active = true;
-  let unregisterGraphInstructions: (() => void) | null = null;
-  const refreshGraphInstructions = (): void => {
-    if (!active) return;
-    unregisterGraphInstructions?.();
-    unregisterGraphInstructions = options.store.settings().graphContextEnabled === true
-      ? ctx.registerInstructions({
+    let unregisterGraphInstructions: (() => void) | null = null;
+    const refreshGraphInstructions = (): void => {
+      if (!active) return;
+      unregisterGraphInstructions?.();
+      unregisterGraphInstructions = options.store.settings().graphContextEnabled === true
+        ? ctx.registerInstructions({
         agents: ["teacher", "practice"],
         text: [
           "# Graph-informed Learning Path tutoring",
@@ -581,13 +588,13 @@ export function registerNativeBridge(
           GRAPH_AGENT_RULES,
         ].join("\n"),
       }) : null;
-  };
-  refreshGraphInstructions();
-  return { refreshGraphInstructions, dispose: () => {
-    if (!active) return;
-    active = false;
-    unregisterGraphInstructions?.();
-    unregisterInstructions();
-    unregisterTools();
-  } };
+    };
+    refreshGraphInstructions();
+    return { refreshGraphInstructions, dispose: () => {
+      if (!active) return;
+      active = false;
+      unregisterGraphInstructions?.();
+      unregisterInstructions();
+      unregisterTools();
+    } };
 }
