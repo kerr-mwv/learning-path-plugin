@@ -50,7 +50,9 @@ export function createBrowserSessionHost(
   const fetchImpl =
     options.fetch ??
     (typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : undefined);
-  const storage = options.storage ?? storageOrNull();
+  // An explicit null storage means "none"; only an absent option falls back
+  // to the global sessionStorage (which newer runtimes always expose).
+  const storage = options.storage === undefined ? storageOrNull() : options.storage;
 
   return {
     async create({ title, kind }) {

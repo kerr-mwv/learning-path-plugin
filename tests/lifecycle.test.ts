@@ -17,7 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import type { PluginMenuProps, PluginTreeRow, PluginView } from "learnharness-plugin-api";
+import type { PluginMenuProps, PluginView } from "learnharness-plugin-api";
 import { activate as activateBackend } from "../src/backend.ts";
 import { activate as activateFrontend } from "../src/main.ts";
 import { mountPathHub } from "../src/view/path-hub.ts";
@@ -25,7 +25,7 @@ import { mountSettingsPage } from "../src/settings.ts";
 import { SETTINGS_FILE } from "../src/store.ts";
 import { makePath } from "./fixtures.ts";
 import { createHost } from "./host.ts";
-import { createViewFixture } from "./view-host.ts";
+import { createViewFixture, selectRoadmapCard } from "./view-host.ts";
 import type { ViewFixture } from "./view-host.ts";
 
 const project = fileURLToPath(new URL("../", import.meta.url));
@@ -46,21 +46,6 @@ function runNode(script: string, args: readonly string[], cwd: string) {
 function buttonRecord(fixture: ViewFixture, label: string) {
   const found = fixture.all("mountButton").find((record) => record.props.label === label);
   assert.ok(found, `Missing button ${label}`);
-  return found;
-}
-
-function selectedNode(fixture: ViewFixture, key: string) {
-  const tree = fixture.find("mountTree");
-  const rows: PluginTreeRow[] = [];
-  const visit = (entries: readonly PluginTreeRow[]) => {
-    for (const row of entries) {
-      rows.push(row);
-      if (row.children) visit(row.children);
-    }
-  };
-  visit(tree.props.rows as readonly PluginTreeRow[]);
-  const found = rows.find((row) => row.key === key);
-  assert.ok(found, `Missing tree row ${key}`);
   return found;
 }
 
@@ -253,7 +238,7 @@ test("dialogs and menus defer Escape and focus to the host and close without sid
 
   mountPathHub(fixture.context, fixture.root, fixture.context.signal);
   await flushAll(fixture);
-  await selectedNode(fixture, "node:n-concept").selection!.onChange(true);
+  selectRoadmapCard(fixture.root, "n-concept");
   await flushAll(fixture);
 
   // A modal dialog: accessible title, content scoped to its own signal.

@@ -16,6 +16,7 @@
  * runs, `cleanup` releases handlers, subscriptions, the bridge and the definition,
  * and no tool writes after the signal aborts.
  */
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type {
   ModelCatalogResponse,
@@ -31,7 +32,14 @@ import type { ArchitectRegistration } from "./architect-agent.ts";
 import {
   ARTIFACT_TYPES,
   CHILD_SESSION_KINDS,
+  DomainValidationError,
   PROGRESSION_STATES,
+  MAX_PATH_TAGS,
+  MAX_WORKSPACE_ITEM_TITLE_LENGTH,
+  MAX_WORKSPACE_NOTE_BYTES,
+  WORKSPACE_LINK_RELS,
+  parsePathFolder,
+  parsePathTag,
   parsePluginSettings,
 } from "./domain.ts";
 import type {
@@ -41,8 +49,11 @@ import type {
   LearningPath,
   PathNode,
   PluginSettings,
+  WorkspaceLinkRel,
+  WorkspaceItem,
 } from "./domain.ts";
 import { buildChildSessionBrief } from "./framework.ts";
+import { exportLearningPath } from "./export.ts";
 import { registerNativeBridge } from "./native-bridge.ts";
 import {
   addChildLink,
@@ -67,6 +78,7 @@ import {
   EVENT_PATHS_CHANGED,
   EVENT_SETTINGS_CHANGED,
   EVENT_SOURCES_CHANGED,
+  EVENT_WORKSPACE_CHANGED,
 } from "./topics.ts";
 import type { ArchitectProgress } from "./topics.ts";
 
@@ -76,6 +88,7 @@ export {
   EVENT_PATHS_CHANGED,
   EVENT_SETTINGS_CHANGED,
   EVENT_SOURCES_CHANGED,
+  EVENT_WORKSPACE_CHANGED,
 };
 
 const MAX_REQUEST_ID = 200;
@@ -91,6 +104,16 @@ interface PathSummary {
   readonly moduleCount: number;
   readonly nodeCount: number;
   readonly sourceMode: LearningPath["sourceSpine"]["mode"];
+  /** Spine titles for the overview card; canonical references or uploads. */
+  readonly sourceTitles: readonly string[];
+  /** Ungated node-state inventory: honest counts, never a completion target. */
+  readonly nodeStates: Readonly<Record<PathNode["progression"], number>>;
+  readonly pendingPivotCount: number;
+  readonly unresolvedErrorCount: number;
+  /** Learner-owned grouping tags; absent on old paths reads as none. */
+  readonly tags: readonly string[];
+  /** The path's one folder home, or null when unfiled. */
+  readonly folder: string | null;
   readonly architectChatId?: string | null;
 }
 
@@ -151,6 +174,57 @@ function readPivotAction(value: unknown): PivotAction {
   return value;
 }
 
+function readLinkRel(value: unknown): WorkspaceLinkRel {
+  if (typeof value !== "string" || !(WORKSPACE_LINK_RELS as readonly string[]).includes(value)) {
+    throw new Error(`rel must be one of: ${WORKSPACE_LINK_RELS.join(", ")}.`);
+  }
+  return value as WorkspaceLinkRel;
+}
+
+/** Learner grouping tags, validated with the domain's own rules so the store
+ * and the RPC surface cannot disagree. Empty means "no tags" (the key is
+ * dropped from the record), matching absent-on-old-paths. */
+function readTagsInput(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) throw new Error("tags must be an array.");
+  if (value.length > MAX_PATH_TAGS) {
+    throw new Error(`tags accepts at most ${MAX_PATH_TAGS} entries.`);
+  }
+  const seen = new Set<string>();
+  return value.map((entry, index) => {
+    let tag: string;
+    try {
+      tag = parsePathTag(entry, `tags[${index}]`);
+    } catch (error) {
+      if (error instanceof DomainValidationError) {
+        throw new Error(error.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; "));
+      }
+      throw error;
+    }
+    if (seen.has(tag.toLowerCase())) {
+      throw new Error(`tags[${index}]: duplicate tag "${tag}".`);
+    }
+    seen.add(tag.toLowerCase());
+    return tag;
+  });
+}
+
+/** Learner folder input. `undefined` leaves the current folder alone; `null`
+ * or an empty string clears it, mirroring how empty tags drop the key. */
+function readFolderInput(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "string") throw new Error("folder must be a string or null.");
+  if (value.trim().length === 0) return null;
+  try {
+    return parsePathFolder(value, "folder");
+  } catch (error) {
+    if (error instanceof DomainValidationError) {
+      throw new Error(error.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; "));
+    }
+    throw error;
+  }
+}
+
 /** Uploaded source ids a path references, so deletion can remove only orphans. */
 function sourceIdsForPath(path: LearningPath): readonly string[] {
   const ids = new Set<string>();
@@ -178,14 +252,38 @@ function findNodeById(path: LearningPath, nodeId: string): PathNode | null {
 }
 
 function summarize(path: LearningPath): PathSummary {
+  const nodes = path.modules.flatMap((module) => module.nodes);
+  const nodeStates: Record<PathNode["progression"], number> = {
+    unstarted: 0,
+    in_progress: 0,
+    consolidated: 0,
+  };
+  let pendingPivotCount = 0;
+  let unresolvedErrorCount = 0;
+  for (const node of nodes) {
+    nodeStates[node.progression] += 1;
+    pendingPivotCount += node.pivotSuggestions.filter((pivot) => pivot.status === "pending").length;
+    unresolvedErrorCount += node.errors.filter((error) => !error.resolved).length;
+  }
+  const spine = path.sourceSpine;
+  const sourceTitles =
+    spine.mode === "canonical"
+      ? spine.references.map((reference) => reference.title)
+      : spine.sources.map((source) => source.name);
   return {
     id: path.id,
     title: path.title,
     goal: path.goal,
     updatedAt: path.updatedAt,
     moduleCount: path.modules.length,
-    nodeCount: path.modules.reduce((total, module) => total + module.nodes.length, 0),
-    sourceMode: path.sourceSpine.mode,
+    nodeCount: nodes.length,
+    sourceMode: spine.mode,
+    sourceTitles,
+    nodeStates,
+    pendingPivotCount,
+    unresolvedErrorCount,
+    tags: path.tags ?? [],
+    folder: path.folder ?? null,
     architectChatId: path.architectChatId ?? null,
   };
 }
@@ -237,7 +335,86 @@ function updateNodeInPath(
   };
 }
 
-export function activate(ctx: PluginBackendContext): void {
+/** The OS file-manager command per platform; every other platform falls back
+ * to the freedesktop opener. Exported for documentation and tests. */
+const PLATFORM_FILE_MANAGERS: Readonly<Partial<Record<NodeJS.Platform, string>>> = {
+  darwin: "open",
+  win32: "explorer",
+};
+const FALLBACK_FILE_MANAGER = "xdg-open";
+
+/** Reveal one directory in the host OS's file manager. The child is detached
+ * and unref'd so the backend never waits on a GUI window; a missing opener
+ * rejects so the frontend can surface the failure. */
+export async function revealInFileManager(directory: string): Promise<void> {
+  const command = PLATFORM_FILE_MANAGERS[process.platform] ?? FALLBACK_FILE_MANAGER;
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(command, [directory], { detached: true, stdio: "ignore" });
+    child.once("error", (problem) => {
+      reject(
+        new Error(
+          `Could not open the file manager (${command}): ${
+            problem instanceof Error ? problem.message : String(problem)
+          }`,
+        ),
+      );
+    });
+    child.once("spawn", () => {
+      child.unref();
+      resolve();
+    });
+  });
+}
+
+/** The OS opener per platform for handing one file to the learner's chosen
+ * application. Windows shows its native "How do you want to open this file?"
+ * chooser (OpenAs_RunDLL) so the learner always picks the application; macOS
+ * and the freedesktop fallback open the registered default and the OS itself
+ * prompts for an application wherever none is registered. Exported for
+ * documentation and tests. */
+const PLATFORM_OPENERS: Readonly<
+  Partial<Record<NodeJS.Platform, { readonly command: string; readonly args: readonly string[] }>>
+> = {
+  darwin: { command: "open", args: [] },
+  win32: { command: "rundll32", args: ["shell32.dll,OpenAs_RunDLL"] },
+};
+const FALLBACK_OPENER = { command: "xdg-open", args: [] } as const;
+
+/** Hand one file to the OS, which opens it in an application of the learner's
+ * choosing (prompting for one where no default is registered). The child is
+ * detached and unref'd so the backend never waits on a GUI window; a missing
+ * opener rejects so the frontend can surface the failure. */
+export async function openWithApplicationChooser(file: string): Promise<void> {
+  const opener = PLATFORM_OPENERS[process.platform] ?? FALLBACK_OPENER;
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(opener.command, [...opener.args, file], { detached: true, stdio: "ignore" });
+    child.once("error", (problem) => {
+      reject(
+        new Error(
+          `Could not open the file in an editor (${opener.command}): ${
+            problem instanceof Error ? problem.message : String(problem)
+          }`,
+        ),
+      );
+    });
+    child.once("spawn", () => {
+      child.unref();
+      resolve();
+    });
+  });
+}
+
+/** Optional activation seams, so tests never spawn a real GUI process. */
+export interface BackendActivationOptions {
+  /** Replace the OS file-manager opener behind workspace.openDirectory. */
+  readonly openInFileManager?: (directory: string) => Promise<void>;
+  /** Replace the OS application opener behind workspace.openItem. */
+  readonly openWithApplicationChooser?: (file: string) => Promise<void>;
+}
+
+export function activate(ctx: PluginBackendContext, options: BackendActivationOptions = {}): void {
+  const openInFileManager = options.openInFileManager ?? revealInFileManager;
+  const openInApplication = options.openWithApplicationChooser ?? openWithApplicationChooser;
   const store: LearningPathStore = openLearningPathStore(ctx.dataDirectory);
   const disposers: (() => void)[] = [];
   const watchers = new Map<string, () => void>();
@@ -278,13 +455,12 @@ export function activate(ctx: PluginBackendContext): void {
 
   // Native child-session tools and conditional instructions. Registered for
   // prober/teacher/practice; the per-turn factory returns [] for unlinked chats.
-  disposers.push(
-    registerNativeBridge(ctx, {
-      store,
-      onPathChanged: (path, detail) =>
-        emit(EVENT_PATHS_CHANGED, { id: path.id, ...detail, updatedAt: path.updatedAt }),
-    }),
-  );
+  const nativeBridge = registerNativeBridge(ctx, {
+    store,
+    onPathChanged: (path, detail) =>
+      emit(EVENT_PATHS_CHANGED, { id: path.id, ...detail, updatedAt: path.updatedAt }),
+  });
+  disposers.push(nativeBridge.dispose);
 
   const cancelRuns = (): void => {
     const ids = new Set(watchers.keys());
@@ -491,6 +667,25 @@ export function activate(ctx: PluginBackendContext): void {
     return { path: store.path(id) };
   });
 
+  handle("paths.export", (input) => {
+    if (ctx.signal.aborted) throw new Error("The Learning Path plugin is shutting down.");
+    const value = object(input, "paths.export");
+    const rawId = value.pathId ?? value.id;
+    const pathId = readText(rawId, "pathId", { max: 128 });
+    if (value.format !== "json" && value.format !== "markdown") {
+      throw new Error('format must be "json" or "markdown".');
+    }
+    const path = store.path(pathId);
+    if (!path) throw new Error(`Unknown path: ${pathId}`);
+    // The Workspace rides along on Markdown exports; notes are carried verbatim.
+    const workspace = store.workspace(pathId);
+    const workspaceItems = (workspace?.items ?? []).map((item) => ({
+      item,
+      content: store.readWorkspaceItemContent(pathId, item.id),
+    }));
+    return exportLearningPath(path, value.format, store.settings(), workspaceItems);
+  });
+
   // ---- Settings -----------------------------------------------------------
 
   handle("settings.get", () => ({ settings: store.settings() }));
@@ -506,6 +701,7 @@ export function activate(ctx: PluginBackendContext): void {
       assertModelAvailable(catalog, preference);
     }
     const saved = store.saveSettings(requested);
+    nativeBridge.refreshGraphInstructions();
     const override = preferenceModel(saved.architect);
     if (override) {
       const modelPending = applySettingsModel(override);
@@ -572,6 +768,33 @@ export function activate(ctx: PluginBackendContext): void {
     emit(EVENT_PATHS_CHANGED, {
       id: saved.id,
       nodeId,
+      updatedAt: saved.updatedAt,
+    });
+    return { path: saved };
+  });
+
+  // ---- Learner grouping metadata ------------------------------------------
+
+  // Tags are learner-owned filing (an exam, a field, a project). The Architect
+  // has no tool that writes them, and grouping stays topical, never temporal.
+  handle("paths.updateMeta", (input) => {
+    if (ctx.signal.aborted) throw new Error("The Learning Path plugin is shutting down.");
+    const value = object(input, "paths.updateMeta");
+    const pathId = readText(value.pathId, "pathId", { max: 128 });
+    const tags = readTagsInput(value.tags);
+    const folder = readFolderInput(value.folder);
+    const path = store.path(pathId);
+    if (!path) throw new Error(`Unknown path: ${pathId}`);
+    const nextFolder = folder === undefined ? path.folder : (folder ?? undefined);
+    const { tags: _previous, folder: _previousFolder, ...withoutFiling } = path;
+    const saved = store.savePath({
+      ...withoutFiling,
+      updatedAt: new Date().toISOString(),
+      ...(tags.length === 0 ? {} : { tags }),
+      ...(nextFolder === undefined ? {} : { folder: nextFolder }),
+    });
+    emit(EVENT_PATHS_CHANGED, {
+      id: saved.id,
       updatedAt: saved.updatedAt,
     });
     return { path: saved };
@@ -725,6 +948,209 @@ export function activate(ctx: PluginBackendContext): void {
     return saved;
   });
 
+  // ---- Workspace (learner-owned material) ---------------------------------
+
+  // Learner items are created, edited, linked and deleted only through these
+  // frontend RPCs: no agent tool ever writes a learner workspace item. The
+  // manifest is the index; files under workspaces/<pathId>/files/ are the truth.
+  handle("workspace.list", (input) => {
+    const pathId = readText(object(input, "workspace.list").pathId, "pathId", { max: 128 });
+    if (!store.path(pathId)) throw new Error(`Unknown path: ${pathId}`);
+    return { workspace: store.workspace(pathId) };
+  });
+
+  // Bidirectional sync: files are the truth. The manifest re-hydrates from
+  // the content files — an external edit to a file's frontmatter or body wins,
+  // and a file the learner added outside the harness materializes as an
+  // item. The hub calls this on every refresh, so the ledger reflects the
+  // learner's editor the next time anyone looks; the change notification lets
+  // any other open window refetch too.
+  handle("workspace.resync", (input) => {
+    if (ctx.signal.aborted) throw new Error("The Learning Path plugin is shutting down.");
+    const value = object(input, "workspace.resync");
+    const pathId = readText(value.pathId, "pathId", { max: 128 });
+    if (!store.path(pathId)) throw new Error(`Unknown path: ${pathId}`);
+    const { changed } = store.syncWorkspaceFromFiles(pathId);
+    if (changed) emit(EVENT_WORKSPACE_CHANGED, { pathId });
+    return { workspace: store.workspace(pathId), changed };
+  });
+
+  handle("workspace.saveNote", (input) => {
+    if (ctx.signal.aborted) throw new Error("The Learning Path plugin is shutting down.");
+    const value = object(input, "workspace.saveNote");
+    const pathId = readText(value.pathId, "pathId", { max: 128 });
+    if (!store.path(pathId)) throw new Error(`Unknown path: ${pathId}`);
+    const title = readText(value.title, "title", {
+      max: MAX_WORKSPACE_ITEM_TITLE_LENGTH,
+      trim: true,
+    });
+    // Verbatim: never trimmed, normalized or converted. The learner's editor is
+    // the source of truth for their own writing; the workspace stores it as-is.
+    // The bound counts characters here; the store enforces the byte cap.
+    const markdown = readText(value.markdown, "markdown", { max: MAX_WORKSPACE_NOTE_BYTES });
+    if (markdown.trim().length === 0) throw new Error("markdown must not be blank.");
+    const caption =
+      value.caption === undefined
+        ? undefined
+        : readText(value.caption, "caption", { max: 2000, trim: true });
+    const nodeId = value.nodeId === undefined ? undefined : readText(value.nodeId, "nodeId", { max: 128 });
+    const rel = value.rel === undefined ? "informs" : readLinkRel(value.rel);
+    // The pop-out pane files a note against several nodes at once: an explicit
+    // links array wins when present; nodeId/rel stay the single-node shorthand.
+    // The store validates every link against real node ids on write.
+    if (value.links !== undefined && !Array.isArray(value.links)) {
+      throw new Error("links must be an array.");
+    }
+    const links = value.links === undefined
+      ? nodeId === undefined
+        ? []
+        : [{ to: nodeId, rel }]
+      : value.links;
+    const item = store.saveWorkspaceItem(
+      pathId,
+      {
+        kind: "note",
+        title,
+        addedBy: "learner",
+        links,
+        ...(caption === undefined ? {} : { caption }),
+      },
+      markdown,
+    );
+    emit(EVENT_WORKSPACE_CHANGED, { pathId, itemId: item.id });
+    return { item };
+  });
+
+  // Generalized uploads (phase 4): one converted document is filed as a
+  // node-linked source item in one learner write. sources/ stays the single
+  // global store — the manifest entry references the sourceId and never copies
+  // content — so hash deduplication and the Architect's chunk tools keep working
+  // unchanged. A document already filed under this path returns its item
+  // unchanged; link edits go through workspace.updateItemMeta.
+  handle("workspace.saveSource", (input) => {
+    if (ctx.signal.aborted) throw new Error("The Learning Path plugin is shutting down.");
+    const value = object(input, "workspace.saveSource");
+    const pathId = readText(value.pathId, "pathId", { max: 128 });
+    if (!store.path(pathId)) throw new Error(`Unknown path: ${pathId}`);
+    const name = readText(value.name, "name", { max: 300, trim: true });
+    const markdown = readText(value.markdown, "markdown", { max: MAX_SOURCE_BYTES });
+    // The title defaults to the document name; a manifest title is capped shorter
+    // than a source name, so an unsupplied long name is truncated once here.
+    const title = value.title === undefined
+      ? name.slice(0, MAX_WORKSPACE_ITEM_TITLE_LENGTH)
+      : readText(value.title, "title", { max: MAX_WORKSPACE_ITEM_TITLE_LENGTH, trim: true });
+    if (value.links !== undefined && !Array.isArray(value.links)) {
+      throw new Error("links must be an array.");
+    }
+    const links = value.links ?? [];
+    const saved = store.saveSource({ name, markdown });
+    const existing = store
+      .workspace(pathId)
+      ?.items.find((item) => item.kind === "source" && item.sourceId === saved.reference.sourceId);
+    if (existing) {
+      return { item: existing, reference: saved.reference, deduplicated: true, alreadyFiled: true };
+    }
+    const item = store.saveWorkspaceItem(pathId, {
+      kind: "source",
+      title,
+      sourceId: saved.reference.sourceId,
+      addedBy: "learner",
+      links,
+    });
+    if (!saved.deduplicated) {
+      emit(EVENT_SOURCES_CHANGED, { sourceId: saved.reference.sourceId, deduplicated: false });
+    }
+    emit(EVENT_WORKSPACE_CHANGED, { pathId, itemId: item.id });
+    return { item, reference: saved.reference, deduplicated: saved.deduplicated, alreadyFiled: false };
+  });
+
+  /** Bounded read: content files are capped at MAX_WORKSPACE_NOTE_BYTES on
+   * write, source items reference the global sources store and carry no file. */
+  handle("workspace.readItem", (input) => {
+    const value = object(input, "workspace.readItem");
+    const pathId = readText(value.pathId, "pathId", { max: 128 });
+    if (!store.path(pathId)) throw new Error(`Unknown path: ${pathId}`);
+    const itemId = readText(value.itemId, "itemId", { max: 128 });
+    const item = store.workspace(pathId)?.items.find((candidate) => candidate.id === itemId) ?? null;
+    if (!item) throw new Error(`Unknown workspace item: ${itemId}`);
+    return { item, content: store.readWorkspaceItemContent(pathId, itemId) };
+  });
+
+  // Learner filing only: title, caption and link relations. Nothing here ever
+  // touches progression, ordering or any scheduling semantics.
+  handle("workspace.updateItemMeta", (input) => {
+    if (ctx.signal.aborted) throw new Error("The Learning Path plugin is shutting down.");
+    const value = object(input, "workspace.updateItemMeta");
+    const pathId = readText(value.pathId, "pathId", { max: 128 });
+    if (!store.path(pathId)) throw new Error(`Unknown path: ${pathId}`);
+    const itemId = readText(value.itemId, "itemId", { max: 128 });
+    const changes: Record<string, unknown> = {};
+    if (value.title !== undefined) {
+      changes.title = readText(value.title, "title", {
+        max: MAX_WORKSPACE_ITEM_TITLE_LENGTH,
+        trim: true,
+      });
+    }
+    if (value.caption !== undefined) {
+      changes.caption =
+        value.caption === null
+          ? null
+          : readText(value.caption, "caption", { max: 2000, trim: true });
+    }
+    if (value.links !== undefined) {
+      if (!Array.isArray(value.links)) throw new Error("links must be an array.");
+      changes.links = value.links;
+    }
+    if (Object.keys(changes).length === 0) {
+      throw new Error("workspace.updateItemMeta needs title, caption or links.");
+    }
+    const item: WorkspaceItem = store.updateWorkspaceItemMeta(pathId, itemId, changes);
+    emit(EVENT_WORKSPACE_CHANGED, { pathId, itemId });
+    return { item };
+  });
+
+  handle("workspace.deleteItem", (input) => {
+    if (ctx.signal.aborted) throw new Error("The Learning Path plugin is shutting down.");
+    const value = object(input, "workspace.deleteItem");
+    const pathId = readText(value.pathId, "pathId", { max: 128 });
+    if (!store.path(pathId)) throw new Error(`Unknown path: ${pathId}`);
+    const itemId = readText(value.itemId, "itemId", { max: 128 });
+    const deleted = store.deleteWorkspaceItem(pathId, itemId);
+    if (deleted) emit(EVENT_WORKSPACE_CHANGED, { pathId, itemId, deleted: true });
+    return { deleted };
+  });
+
+  // Open the path's workspace folder in the host OS file manager. The folder
+  // materializes on demand so an empty workspace opens too; the manifest and
+  // content files stay learner material, never agent-visible data.
+  handle("workspace.openDirectory", async (input) => {
+    if (ctx.signal.aborted) throw new Error("The Learning Path plugin is shutting down.");
+    const value = object(input, "workspace.openDirectory");
+    const pathId = readText(value.pathId, "pathId", { max: 128 });
+    if (!store.path(pathId)) throw new Error(`Unknown path: ${pathId}`);
+    const directory = store.ensureWorkspaceDirectory(pathId);
+    await openInFileManager(directory);
+    return { directory };
+  });
+
+  // Hand one item's content file to the OS: the learner's chosen application
+  // opens it (the OS prompts for one wherever no default is registered), and
+  // whatever the editor writes back lands through workspace.resync. The file
+  // keeps its frontmatter; sources carry no file of their own and are refused.
+  handle("workspace.openItem", async (input) => {
+    if (ctx.signal.aborted) throw new Error("The Learning Path plugin is shutting down.");
+    const value = object(input, "workspace.openItem");
+    const pathId = readText(value.pathId, "pathId", { max: 128 });
+    if (!store.path(pathId)) throw new Error(`Unknown path: ${pathId}`);
+    const itemId = readText(value.itemId, "itemId", { max: 128 });
+    const file = store.workspaceItemFile(pathId, itemId);
+    if (!file) {
+      throw new Error(`The workspace item carries no content file to open: ${itemId}`);
+    }
+    await openInApplication(file);
+    return { file };
+  });
+
   // ---- Child sessions -----------------------------------------------------
 
   /** Build the opening prompt and title before a native chat is created. */
@@ -738,7 +1164,15 @@ export function activate(ctx: PluginBackendContext): void {
     if (!path) throw new Error(`Unknown path: ${pathId}`);
     const node = findNodeById(path, nodeId);
     if (!node) throw new Error(`Unknown node: ${nodeId}`);
-    const brief = buildChildSessionBrief({ path, nodeId, kind, settings: store.settings() });
+    // This prompt is staged as a visible user message. Never read/pass graph
+    // propositions here: private graph context is delivered by get_brief only.
+    const brief = buildChildSessionBrief({
+      path,
+      nodeId,
+      kind,
+      settings: store.settings(),
+      workspace: store.workspace(pathId),
+    });
     return {
       pathId: path.id,
       pathTitle: path.title,

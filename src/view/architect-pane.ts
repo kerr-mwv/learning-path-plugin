@@ -12,6 +12,7 @@
  */
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ArchitectProgress } from "../topics.ts";
+import type { LearningPath } from "../domain.ts";
 import type {
   PluginAgentSnapshot,
   PluginFrontendContext,
@@ -19,6 +20,7 @@ import type {
   PluginStandardComposerProps,
   PluginWidgetHandle,
 } from "learnharness-plugin-api";
+import { buildNodePicker, DOCUMENT_LINK_REL, UPLOAD_ACCEPT_TYPES } from "./workspace-pane.ts";
 
 export interface ArchitectPane {
   readonly element: HTMLElement;
@@ -36,9 +38,23 @@ export interface ArchitectPane {
   conversationId(): string | null;
   /** Whether the user has explicitly opened a fresh unsent draft. */
   isNewDraft(): boolean;
-  /** Convert and store one uploaded PDF/UTF-8 document. */
+  /** Convert and store one uploaded PDF/UTF-8 document (sources flow). */
   uploadFile(file: File): Promise<void>;
   dispose(): void;
+}
+
+/** Where a workspace upload files: the hub's selected path and node. */
+export interface ArchitectUploadTarget {
+  readonly path: LearningPath;
+  readonly nodeId: string | null;
+}
+
+export interface ArchitectPaneOptions {
+  /** The hub's currently selected path and node, or null while none is
+   * selected. A workspace upload files into the path's workspace, linked
+   * `grounds` to the picked nodes; without a target the option is declined
+   * with a status message instead of being silently disabled. */
+  readonly uploadTarget?: () => ArchitectUploadTarget | null;
 }
 
 interface TextPart {
@@ -91,6 +107,7 @@ export function createArchitectPane(
   ctx: PluginFrontendContext,
   container: HTMLElement,
   signal: AbortSignal,
+  options: ArchitectPaneOptions = {},
 ): ArchitectPane {
   const document = container.ownerDocument;
   const root = element(document, "section", "lp-architect");
@@ -118,13 +135,15 @@ export function createArchitectPane(
   const uploadRow = element(document, "div", "lp-upload-row");
   const uploadHost = element(document, "span", "lp-button-host");
   uploadRow.append(uploadHost);
+  const workspaceUploadHost = element(document, "span", "lp-button-host");
+  uploadRow.append(workspaceUploadHost);
   const uploadStatus = element(document, "p", "lp-upload-status");
   uploadStatus.setAttribute("role", "status");
   uploadStatus.setAttribute("aria-live", "polite");
   uploadRow.append(uploadStatus);
   const fileInput = element(document, "input", "lp-file-input");
   fileInput.type = "file";
-  fileInput.accept = ".pdf,.md,.markdown,.txt,.text,application/pdf,text/plain,text/markdown";
+  fileInput.accept = UPLOAD_ACCEPT_TYPES;
   fileInput.hidden = true;
   fileInput.setAttribute("aria-label", "Upload a PDF or UTF-8 text source");
   uploadRow.append(fileInput);
@@ -151,6 +170,9 @@ export function createArchitectPane(
   let disposed = false;
   let loadVersion = 0;
   let newDraft = false;
+  /** Which affordance opened the native file picker: sources (the default
+   * corpus flow) or the workspace filing flow. */
+  let uploadMode: "sources" | "workspace" = "sources";
 
   const uploadButton = ctx.ui.mountButton(
     uploadHost,
@@ -159,7 +181,26 @@ export function createArchitectPane(
       variant: "outline",
       size: "sm",
       onClick: () => {
-        if (!signal.aborted && !disposed && !uploading) fileInput.click();
+        if (!signal.aborted && !disposed && !uploading) {
+          uploadMode = "sources";
+          fileInput.click();
+        }
+      },
+    },
+    { signal },
+  );
+  const workspaceUploadButton = ctx.ui.mountButton(
+    workspaceUploadHost,
+    {
+      label: "Add to workspace",
+      variant: "outline",
+      size: "sm",
+      title: "Convert a PDF or text document and file it in the selected path's workspace, linked to a node",
+      onClick: () => {
+        if (!signal.aborted && !disposed && !uploading) {
+          uploadMode = "workspace";
+          fileInput.click();
+        }
       },
     },
     { signal },
@@ -555,8 +596,27 @@ export function createArchitectPane(
     if (signal.aborted || disposed || uploading) return;
     uploading = true;
     uploadButton.update({ label: "Upload PDF or text", disabled: true });
+    workspaceUploadButton.update({ label: "Add to workspace", disabled: true });
     uploadStatus.className = "lp-upload-status";
     delete uploadStatus.dataset.state;
+    try {
+      if (uploadMode === "workspace") {
+        await uploadToWorkspace(file);
+      } else {
+        await uploadToSources(file);
+      }
+    } finally {
+      uploading = false;
+      if (!signal.aborted && !disposed) {
+        uploadButton.update({ disabled: false });
+        workspaceUploadButton.update({ disabled: false });
+      }
+    }
+  }
+
+  /** The default corpus flow: convert and store once in the global, hash-
+   * deduplicated source library. Notices surface here, as always. */
+  async function uploadToSources(file: File): Promise<void> {
     uploadStatus.textContent = `Converting ${file.name}…`;
     try {
       const converted = await ctx.documents.toMarkdown(file, { signal });
@@ -575,10 +635,138 @@ export function createArchitectPane(
       if (signal.aborted || disposed) return;
       uploadStatus.textContent = `Could not use ${file.name}: ${errorMessage(problem)}`;
       uploadStatus.dataset.state = "error";
-    } finally {
-      uploading = false;
-      if (!signal.aborted && !disposed) uploadButton.update({ disabled: false });
     }
+  }
+
+  /** The workspace filing flow (phase 4): convert, then the learner picks the
+   * nodes the document grounds in a dialog over this pane. One learner write
+   * (workspace.saveSource) stores the document in the global source library
+   * and files the manifest entry that references its id — no content is ever
+   * copied into the workspace. Cancelling writes nothing. */
+  async function uploadToWorkspace(file: File): Promise<void> {
+    const target = options.uploadTarget?.() ?? null;
+    if (!target) {
+      uploadStatus.textContent =
+        "Select a path first: a workspace upload is filed in the selected path's workspace.";
+      uploadStatus.dataset.state = "error";
+      return;
+    }
+    uploadStatus.textContent = `Converting ${file.name}…`;
+    try {
+      const converted = await ctx.documents.toMarkdown(file, { signal });
+      if (signal.aborted || disposed) return;
+      const filed = await openFileInWorkspaceDialog(
+        converted.name,
+        converted.markdown,
+        converted.notices,
+        target,
+      );
+      if (signal.aborted || disposed) return;
+      if (filed) {
+        const suffix = converted.notices.length > 0 ? ` ${converted.notices.join(" ")}` : "";
+        uploadStatus.textContent = `Filed ${converted.name} in the workspace.${suffix}`;
+        uploadStatus.dataset.state = "success";
+      } else {
+        uploadStatus.textContent = `Cancelled; ${file.name} was not saved.`;
+      }
+    } catch (problem) {
+      if (signal.aborted || disposed) return;
+      uploadStatus.textContent = `Could not use ${file.name}: ${errorMessage(problem)}`;
+      uploadStatus.dataset.state = "error";
+    }
+  }
+
+  /** Filing dialog: the node picker is the one filing surface, shared with the
+   * workspace pane. Resolves true when the learner saved, false when the
+   * dialog closed any other way; the status line reports either outcome. */
+  function openFileInWorkspaceDialog(
+    name: string,
+    markdown: string,
+    notices: readonly string[],
+    target: ArchitectUploadTarget,
+  ): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      let close: () => void = () => {};
+      let saved = false;
+      const dialog = ctx.ui.openDialog(
+        {
+          title: `File “${name}” in Workspace`,
+          content: (content: HTMLElement, contentSignal: AbortSignal): (() => void) | undefined => {
+            const dialogDocument = content.ownerDocument;
+            const root = element(dialogDocument, "div", "lp-workspace-source-dialog");
+            root.append(
+              element(
+                dialogDocument,
+                "p",
+                "lp-muted",
+                `Stored once in your source library and filed in this path's workspace. Pick the nodes it grounds (${DOCUMENT_LINK_REL}); leave all unchecked to keep it unlinked.`,
+              ),
+            );
+            if (notices.length > 0) {
+              root.append(element(dialogDocument, "p", "lp-muted", notices.join(" ")));
+            }
+            const pickerLabel = element(dialogDocument, "span", "lp-field-label", "Linked nodes");
+            const picker = buildNodePicker(
+              dialogDocument,
+              target.path,
+              new Set(target.nodeId ? [target.nodeId] : []),
+            );
+            root.append(pickerLabel, picker.root);
+
+            const error = element(dialogDocument, "p", "lp-dialog-error");
+            error.setAttribute("role", "alert");
+            error.hidden = true;
+
+            const saveHost = element(dialogDocument, "span", "lp-button-host");
+            root.append(error, saveHost);
+            content.append(root);
+
+            const save = ctx.ui.mountButton(
+              saveHost,
+              {
+                label: "Save to Workspace",
+                variant: "default",
+                size: "sm",
+                onClick: async () => {
+                  if (contentSignal.aborted) return;
+                  error.hidden = true;
+                  save.update({ disabled: true, label: "Saving…" });
+                  try {
+                    await ctx.call("workspace.saveSource", {
+                      pathId: target.path.id,
+                      name,
+                      markdown,
+                      links: picker.checked().map((nodeId) => ({ to: nodeId, rel: DOCUMENT_LINK_REL })),
+                    });
+                    if (contentSignal.aborted) return;
+                    saved = true;
+                    close();
+                  } catch (problem) {
+                    if (contentSignal.aborted) return;
+                    error.textContent = `Could not file the document: ${errorMessage(problem)}`;
+                    error.hidden = false;
+                    save.update({ disabled: false, label: "Save to Workspace" });
+                  }
+                },
+              },
+              { signal: contentSignal },
+            );
+            return () => {
+              save.dispose();
+              root.remove();
+              // The dialog chrome's own close is the cancel path: this fires
+              // whether the learner saved or closed, so the status line can
+              // report the outcome either way.
+              resolve(saved);
+            };
+          },
+        },
+        { signal },
+      );
+      close = (): void => {
+        dialog.dispose();
+      };
+    });
   }
 
   const onFileChange = (): void => {

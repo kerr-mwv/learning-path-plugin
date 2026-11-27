@@ -1,5 +1,5 @@
 /** Shared, valid domain fixtures for domain, framework and store tests. */
-import type { LearningPath, PathNode, SourceAnchor } from "../src/domain.ts";
+import type { LearningPath, PathNode, SourceAnchor, WorkspaceItem, WorkspaceManifest } from "../src/domain.ts";
 
 export const AT = "2026-01-31T09:30:00.000Z";
 
@@ -128,3 +128,34 @@ export function makePath(): LearningPath {
 
 export const clone = <T>(value: T): T => structuredClone(value);
 export const rawPath = (): any => clone(makePath());
+
+export const UUID = "0f8fad5b-d9cb-469f-a165-70867728950e";
+
+export const ITEM_ID = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
+export const ITEM_ID_2 = "3f2504e0-4f89-11d3-9a0c-0305e82c3302";
+export const ITEM_ID_3 = "3f2504e0-4f89-11d3-9a0c-0305e82c3303";
+export const ITEM_ID_4 = "3f2504e0-4f89-11d3-9a0c-0305e82c3304";
+
+/** One valid workspace item against makePath()'s node ids. */
+export function makeItem(overrides: Partial<WorkspaceItem> = {}): WorkspaceItem {
+  return {
+    id: ITEM_ID,
+    kind: "note",
+    title: "Feynman notes on vector spaces",
+    addedAt: AT,
+    addedBy: "learner",
+    links: [],
+    ...overrides,
+  };
+}
+
+/** A valid manifest for the path from makePath(). */
+export function makeManifest(overrides: Partial<WorkspaceManifest> = {}): WorkspaceManifest {
+  return {
+    schemaVersion: 1,
+    pathId: "path-linear-algebra",
+    updatedAt: AT,
+    items: [makeItem()],
+    ...overrides,
+  };
+}

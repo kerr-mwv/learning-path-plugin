@@ -103,7 +103,7 @@ credential files inside the package.
 The build writes only `dist/`. It refuses a symlinked `dist/` and a misplaced
 `dist/data/`, and never touches a sibling `data/` directory. At runtime the
 plugin writes through the host-provided `ctx.dataDirectory`:
-`learning-paths.json`, `settings.json`, `architect.json` and `sources/`. It leaves
+`paths/<pathId>.json`, `settings.json`, `architect.json` and `sources/`. It leaves
 host-reserved `agents/`, `tasks/` and `usage.jsonl` alone, refuses newer or
 corrupt records instead of wiping them, and never deletes native chats or
 Knowledge Graph records.
@@ -137,19 +137,112 @@ Knowledge Graph records.
    creates a native session, stages a tailored opening brief and opens it. Linked
    sessions get `learning_path_*` tools that read the brief and write progress,
    errors and advisory pivots. Unlinked sessions get no tools at all.
-4. **Record what happened.** Progression is ungated:
+4. **Keep your own material in the Workspace.** Select a node and use the
+   **Add Note** button in its Workspace section to file your own Markdown —
+   pasted from your editor and stored exactly as written, never reformatted.
+   Link or unlink a note to the node you are viewing; delete items you no longer
+   want. A child session's brief lists the material linked to its node by kind
+   and title only, and reads the full text through the bounded
+   `learning_path_read_workspace_item` tool — so the brief stays small no matter
+   how much you file. When a session actually produces its node's recommended
+   artifact, it saves the full text with `learning_path_save_artifact` — it
+   appears in the Workspace linked to the node, with the session that made it.
+   Agents can never create, edit, link or delete your items.
+
+   Documents come in through the same conversion pipeline wherever you are:
+   **Add to workspace** beside the Architect's upload converts a PDF or text
+   file and files it in the selected path's Workspace, linked `grounds` to the
+   nodes you pick; or drop files onto the Workspace pane's filing strip (its
+   **Select from computer…** button opens the same flow for a picked file).
+   Only the strip takes a drop — the pane's list and the path surfaces behind
+   it never do, so the two drop intents never clash. The document is stored
+   once in your source library — hash-deduplicated — and the Workspace entry
+   references it; nothing is copied into the workspace.
+   The Architect's refinement context lists node-linked material by title only
+   and reads a filed document through the same bounded chunk tool it uses for
+   any uploaded source.
+5. **Record what happened.** Progression is ungated:
    `unstarted → in_progress → consolidated`. Log mistakes by cognitive root
    cause; unresolved entries travel forward as watchpoints. If a topic genuinely
    is not sticking, the agent may suggest a bounded detour; you accept, discuss
    or dismiss it. The path is never restructured silently.
-5. **Tune defaults.** Settings → Learning Paths configures artifact defaults per
-   node type (with the framework's justification), the Architect model/thinking
-   preference, and safe path deletion. Saving a new Architect model while an
+6. **Tune defaults.** Settings → Learning Paths configures artifact defaults per
+   node type (with the framework's justification), experimental graph-informed
+   tutoring (default off), the Architect model/thinking preference, and safe path
+   deletion. A path can also be deleted straight from the Path Hub's Paths
+   overview — the trashcan at a card's foot opens a dialog that names exactly
+   what goes (the path record, its workspace, orphaned converted uploads) and
+   what stays (native chats, Knowledge Graph records). Saving a new Architect model while an
    Architect run is in progress never cancels it; the model applies once the run
    finishes.
+7. **Export a path.** Use **Export Path** in the Path Hub, or **Export JSON** /
+   **Export Markdown** beside a path in Settings → Learning Paths. JSON is a
+   validated, pretty-printed copy of the complete path record. Markdown is a
+   readable document with the goal, progress, source spine, modules, nodes,
+   anchors, effective artifacts, child sessions, error ledger, pivot
+   suggestions and — when the path has one — its Workspace, with your notes
+   carried verbatim. Both download locally; exporting never changes the path or
+   any native chat.
 
 There is deliberately **no scheduling**: no hours, days, streaks or completion
 dates. Any node can be opened at any time.
+
+## Experimental learner-first map revisiting
+
+Enable **Settings → Learning Paths → Offer learner-first earlier-map revisits**
+only if linked Teacher sessions should optionally revisit an earlier relational
+map after the learner makes the current map first. The learner may supply an
+earlier map and explain what to keep, change or connect before feedback;
+declining or lacking one continues normally. The setting is off by default,
+separate from graph-informed tutoring, and does not apply to Practice, Prober,
+skill/bridge or non-relational sessions.
+
+The guidance is delivered only through the private `learning_path_get_brief`
+agent response. It never enters the learner-visible `sessions.prepare` prompt.
+The plugin does not scrape transcripts, treat `artifactNote` as a full map, add
+map storage, write the native graph or create a consolidation gate.
+
+## Experimental graph-informed tutoring
+
+Enable **Settings → Learning Paths → Use graph context for teaching and practice**
+only if you want linked teaching/practice agents to use recorded prior knowledge
+when choosing questions. It is off by default on `experimental`; turning it off
+removes graph search and graph-context instructions on subsequent turns. Normal
+unlinked sessions, the prober, and the Path Architect are unchanged.
+
+The agent asks before revealing connections. It checks recall rather than treating
+graph presence as mastery, prefers unlabelled transfer problems, and provides
+feedback only after the learner attempts. For relational maps, the learner draws
+first and the agent reviews afterward; `skill` and `bridge` units use the graph
+only for recall and watchpoints. This adds no links, review UI, graph writes,
+progression rules, or automatic path changes.
+
+**Intentional delivery boundary:** the opening brief from `sessions.prepare` is
+staged as a learner-visible user message. It therefore never contains retrieved
+graph propositions, even when enabled. Agent-only context is added when a linked
+teacher/practice agent calls `learning_path_get_brief`. A separate bounded,
+read-only `learning_path_search_graph` tool handles relevant detours. Compact tool
+cards do not display the retrieved text in the normal transcript. This is a
+prompt/delivery safeguard, not a security boundary against a learner inspecting
+raw tool messages, or a guarantee that an LLM will never disclose a connection.
+
+Retrieval uses the public `ctx.learning.graph().propositions` projection, not
+transcripts or graph-file reads. It matches the unit title, goal and source anchor
+against statements and recorded aliases, across all recorded sessions/paths.
+Propositions recorded exclusively in the active chat are excluded before ranking;
+mixed, other-source and unknown provenance remain eligible. Title, goal and
+source anchor each have a separate bounded query budget so long goals cannot hide
+the anchor. Each search scans at most 10,000 propositions and returns at most five, with statements
+capped at 600 characters and ids at 128. Query text is bounded; matching text and
+alias counts are capped. The initial SDK graph snapshot is still complete because
+the API has no pagination. Matches are lexical hints, not semantic equivalence;
+unrecorded paraphrases can be missed and homonyms can be false matches.
+
+Missing, empty or unavailable graphs leave the normal brief and tool list
+unchanged. A retained search tool also fails softly if access disappears or the
+setting is disabled. Turning the setting off cannot retract context already
+received earlier in an ongoing conversation; start a fresh session to exclude
+that history entirely.
 
 ## Node taxonomy
 
@@ -189,6 +282,45 @@ Each entry can be resolved or annotated with a reflection note. A pending
 **Pivot Suggestion** proposes a `bridge`, `contrast` or `skill` node with its
 diagnosis; only the learner can accept it. Dismissing it changes nothing.
 
+## Workspace
+
+Every path has one Workspace: your own material for that path — notes now,
+more kinds later — listed in a flat ledger, newest last. It is navigational
+inventory: honest counts, no unread markers, no "new" badges, and no scheduling
+semantics of any kind. Notes are Markdown stored verbatim (the ledger's manifest
+is an index; the files under `workspaces/` are the truth), items can link to
+nodes you choose, and deleting a path deletes its workspace. Child sessions see
+linked items by kind and title only; the full text is available to them through
+a bounded chunked read tool. A session that produces its node's recommended
+artifact can save the full text as a `session_artifact` item linked
+`produced_by` to that node, provenance `session:<chatId>`; the Node Inspector
+shows saved artifacts with their originating session, and map-revisit briefs
+cite saved relational maps instead of asking for a redraw from memory. Agents
+never create, edit, link or delete learner items, and saving an artifact is
+never a gate: progression and revisits work identically without one.
+
+Documents are the Workspace's generalized uploads: **Add to workspace** in the
+Architect pane, or a PDF/text file delivered through the Workspace pane's
+filing strip (dropped there or picked with **Select from computer…**), converts
+the file to Markdown (the same pipeline, with the same notices) and files it as
+a `source` item linked `grounds` to the nodes you pick in the pane's node
+picker. `sources/` stays the single global store — the ledger entry references
+the source's id and never copies content — so re-uploading the same file reuses
+the stored copy and never files it twice.
+
+The pane itself stays honest and navigable: item kinds read as small icons
+(hover carries the word), an expanded row previews its body in place, the
+floating window's **Expand** stretches the ledger across the whole window —
+pinned below the header so its own bar stays clickable — and **Open folder**
+reveals the selected path's workspace directory in your computer's file
+manager (`workspace.openDirectory`; the folder materializes on demand, and
+an empty workspace opens too). An item that owns a content file can also
+leave the list: **Open in editor…** hands the file to the OS
+(`workspace.openItem`), which opens your chosen application — prompting for
+one wherever no default is registered — and whatever the editor writes back
+lands through the ledger's resync. A `source` references the global library
+and offers no such affordance.
+
 ## Project layout
 
 | Path | What |
@@ -196,11 +328,14 @@ diagnosis; only the learner can accept it. Dismissing it changes nothing.
 | `src/domain.ts` | Validated schema, node types, artifact catalog, settings |
 | `src/framework.ts` | Architect system prompt and child-session brief builder |
 | `src/store.ts` | Versioned atomic JSON store under `ctx.dataDirectory` |
+| `src/export.ts` | Deterministic JSON/Markdown path exports and browser download |
 | `src/architect-agent.ts` | Persistent Path Architect definition and server tools |
 | `src/backend.ts` | RPC handlers, events, native bridge and activation lifecycle |
-| `src/view/path-hub.ts` | Path Hub: header, tree, Architect pane, Node Inspector |
+| `src/view/path-hub.ts` | Path Hub: header, roadmap lanes, Architect pane, Node Inspector |
+| `src/view/workspace-pane.ts` | Workspace ledger pop-out pane: flat list, kind icons, notes, links, filing strip (drop/pick), in-place previews, open-in-editor, deletion |
 | `src/view/*` | Architect chat, inspector, error ledger, pivots, dialogs, tool cards |
-| `src/settings.ts` | Artifact defaults, Architect model, safe path deletion |
+| `src/settings.ts` | Artifact defaults, graph-tutoring opt-in, Architect model, safe path deletion |
+| `src/graph-context.ts` | Bounded read-only proposition matching and shared graph-tutoring rules |
 | `scripts/build.mjs` | Guarded esbuild bundle into `dist/` |
 | `scripts/install-plugin-local.mjs` | Portable local installer |
 | `scripts/check-sdk.mjs` | Typecheck preflight for the external SDK types |
@@ -214,6 +349,19 @@ node --test tests/lifecycle.test.ts   # one file
 npm run typecheck                     # tsc --noEmit, strict mode
 npm run build
 ```
+
+For manual Knowledge Graph and graph-informed tutoring tests, seed the
+synthetic Velora fixture into a **dev/scratch data directory** (never your real
+one — the seed script requires an explicit `--data-dir` and refuses the real
+data directory without `--allow-real-data`):
+
+```sh
+npm run seed:graph -- --data-dir /path/to/dev/data
+npm run unseed:graph -- --data-dir /path/to/dev/data
+```
+
+See [`fixtures/velora/README.md`](./fixtures/velora/README.md)
+for the dataset, the expected matches and the branch/install steps.
 
 The plugin only imports types from the LearnHarness plugin API, so building
 and testing need nothing beyond `npm ci`. Typechecking needs those types, which

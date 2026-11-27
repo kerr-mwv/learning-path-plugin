@@ -38,6 +38,42 @@ export type PivotProposalType = (typeof PIVOT_PROPOSAL_TYPES)[number];
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevelName = (typeof THINKING_LEVELS)[number];
 
+/** Learner-owned grouping metadata (an exam, a field, a project). Grouping is
+ * topical, never temporal: no scheduling semantics may attach to a tag. */
+export const MAX_PATH_TAGS = 8;
+export const MAX_PATH_TAG_LENGTH = 40;
+
+/** Validate one learner tag inside a `LearningPath.tags` array. */
+export function parsePathTag(value: unknown, path: string): string {
+  return readString(value, path, { max: MAX_PATH_TAG_LENGTH });
+}
+
+/** A path lives in exactly one folder hierarchy, e.g. `exam/step-2`. Folders
+ * are learner filing like tags (topical, never temporal); tags stay the
+ * cross-cutting dimension, while the folder is the path's primary home. */
+export const MAX_PATH_FOLDER_SEGMENTS = 6;
+export const MAX_PATH_FOLDER_SEGMENT_LENGTH = 40;
+
+/** Validate one learner folder: `a/b/c`, 1-6 non-empty levels of 1-40 chars. */
+export function parsePathFolder(value: unknown, path: string): string {
+  const folder = readString(value, path, {
+    max: MAX_PATH_FOLDER_SEGMENTS * (MAX_PATH_FOLDER_SEGMENT_LENGTH + 1),
+  });
+  const segments = folder.split("/");
+  if (segments.length > MAX_PATH_FOLDER_SEGMENTS) {
+    fail(path, `a folder has at most ${MAX_PATH_FOLDER_SEGMENTS} levels`);
+  }
+  segments.forEach((segment, index) => {
+    const level = `${path} (level ${index + 1})`;
+    if (segment.length === 0) fail(level, "must not be empty");
+    if (segment.length > MAX_PATH_FOLDER_SEGMENT_LENGTH) {
+      fail(level, `must be at most ${MAX_PATH_FOLDER_SEGMENT_LENGTH} characters`);
+    }
+    if (segment !== segment.trim()) fail(level, "must not have leading or trailing whitespace");
+  });
+  return folder;
+}
+
 export const ARTIFACT_TYPES = [
   "micro_code",
   "relational_map",
@@ -234,6 +270,12 @@ export interface LearningPath {
   readonly modules: readonly PathModule[];
   /** Path-level artifact preference; per-node overrides win. */
   readonly artifactDefault?: ArtifactType | null;
+  /** Learner-owned grouping tags, e.g. `exam:step-2` or `field:systems`.
+   * The Architect never writes them; they are filing, not curriculum. */
+  readonly tags?: readonly string[];
+  /** The path's one home in the learner's folder tree, e.g. `exam/step-2`.
+   * Absent reads as unfiled; the Architect never writes it. */
+  readonly folder?: string;
   /** Architect conversation that created/refines this path. */
   readonly architectChatId?: string | null;
 }
@@ -251,6 +293,10 @@ export interface PluginSettings {
   readonly artifactDefaults: Partial<Record<NodeType, ArtifactType>>;
   /** Absent means follow the host strong slot, the default. */
   readonly architect?: ArchitectPreferences;
+  /** Experimental read-only graph context for teaching/practice; absent is off. */
+  readonly graphContextEnabled?: boolean;
+  /** Experimental learner-first revisit of earlier relational maps; absent is off. */
+  readonly mapRevisitEnabled?: boolean;
 }
 
 export interface ValidationIssue {
@@ -617,6 +663,25 @@ function readPathModule(value: unknown, path: string): PathModule {
   };
 }
 
+function readPathTags(value: unknown, path: string): readonly string[] {
+  const entries = readArray(value, path);
+  if (entries.length > MAX_PATH_TAGS) {
+    fail(path, `a path carries at most ${MAX_PATH_TAGS} tags`);
+  }
+  const seen = new Set<string>();
+  return entries.map((entry, index) => {
+    const tag = parsePathTag(entry, `${path}[${index}]`);
+    const key = tag.toLowerCase();
+    // Tags dedupe case-insensitively so `Field:Systems` and `field:systems`
+    // cannot split one group.
+    if (seen.has(key)) {
+      fail(`${path}[${index}]`, `duplicate tag "${tag}"`);
+    }
+    seen.add(key);
+    return tag;
+  });
+}
+
 function readLearningPathValue(value: unknown): LearningPath {
   const path = "path";
   const record = readObject(value, path);
@@ -645,6 +710,10 @@ function readLearningPathValue(value: unknown): LearningPath {
     ...(record.architectChatId === undefined || record.architectChatId === null
       ? { architectChatId: record.architectChatId }
       : { architectChatId: readId(record.architectChatId, `${path}.architectChatId`) }),
+    ...(record.tags === undefined ? {} : { tags: readPathTags(record.tags, `${path}.tags`) }),
+    ...(record.folder === undefined
+      ? {}
+      : { folder: parsePathFolder(record.folder, `${path}.folder`) }),
   };
   assertPathGraph(parsed);
   return parsed;
@@ -717,9 +786,17 @@ function readPluginSettingsValue(value: unknown): PluginSettings {
     record.architect === undefined
       ? undefined
       : readArchitectPreferences(record.architect, `${path}.architect`);
+  const graphContextEnabled = record.graphContextEnabled === undefined
+    ? undefined
+    : readBoolean(record.graphContextEnabled, `${path}.graphContextEnabled`);
+  const mapRevisitEnabled = record.mapRevisitEnabled === undefined
+    ? undefined
+    : readBoolean(record.mapRevisitEnabled, `${path}.mapRevisitEnabled`);
   return {
     artifactDefaults,
     ...(architect === undefined ? {} : { architect }),
+    ...(graphContextEnabled === undefined ? {} : { graphContextEnabled }),
+    ...(mapRevisitEnabled === undefined ? {} : { mapRevisitEnabled }),
   };
 }
 
@@ -767,6 +844,172 @@ export function validatePluginSettings(value: unknown): ValidationResult<PluginS
 
 export function parsePluginSettings(value: unknown): PluginSettings {
   return readPluginSettingsValue(value);
+}
+
+/** Workspace items: the learner's own material attached to one path. The manifest
+ * is a current-state index — entries never embed content; the content files under
+ * `workspaces/<pathId>/files/` are the truth. Agents write only their own
+ * `session_artifact` items; learner items are learner-owned. */
+export const WORKSPACE_ITEM_KINDS = ["note", "session_artifact", "source", "code"] as const;
+export type WorkspaceItemKind = (typeof WORKSPACE_ITEM_KINDS)[number];
+
+/** Link relations for v1. `evidence_of` is deliberately deferred, not forgotten. */
+export const WORKSPACE_LINK_RELS = ["grounds", "informs", "produced_by"] as const;
+export type WorkspaceLinkRel = (typeof WORKSPACE_LINK_RELS)[number];
+
+export const MAX_WORKSPACE_ITEMS = 300;
+export const MAX_WORKSPACE_ITEM_TITLE_LENGTH = 200;
+/** Notes round-trip Markdown verbatim; 256 KiB bounds one item's content file. */
+export const MAX_WORKSPACE_NOTE_BYTES = 256 * 1024;
+
+export interface WorkspaceItemLink {
+  /** A node id in the owning path, or "space" for a workspace-level link. */
+  readonly to: string;
+  readonly rel: WorkspaceLinkRel;
+}
+
+export interface WorkspaceItem {
+  /** A UUID: it names the content file `files/<id>.md`, so it must be one. */
+  readonly id: string;
+  readonly kind: WorkspaceItemKind;
+  readonly title: string;
+  /** kind "source": a reference into the global `sources/` store — the ledger
+   * references, never copies. Not allowed on any other kind. */
+  readonly sourceId?: string;
+  readonly byteSize?: number;
+  readonly sha256?: string;
+  readonly addedAt: string;
+  /** "learner" | "architect:<chatId>" | "session:<chatId>" — provenance, not judgement. */
+  readonly addedBy: string;
+  readonly caption?: string;
+  readonly links: readonly WorkspaceItemLink[];
+}
+
+export interface WorkspaceManifest {
+  readonly schemaVersion: number;
+  readonly pathId: string;
+  readonly updatedAt: string;
+  readonly items: readonly WorkspaceItem[];
+}
+
+const ADDED_BY_PATTERN = /^(architect|session):[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+function readAddedBy(value: unknown, path: string): string {
+  const addedBy = readString(value, path, { max: 137 });
+  if (addedBy !== "learner" && !ADDED_BY_PATTERN.test(addedBy)) {
+    fail(path, 'must be "learner", "architect:<chatId>" or "session:<chatId>"');
+  }
+  return addedBy;
+}
+
+/** Workspace item ids name files under `workspaces/<pathId>/files/`, so like
+ * uploaded source ids they must be UUIDs: unguessable and traversal-free. */
+function readWorkspaceItemId(value: unknown, path: string): string {
+  const id = readString(value, path, { max: 128 });
+  if (!isSourceId(id)) fail(path, "must be a UUID");
+  return id;
+}
+
+function readWorkspaceItemLink(value: unknown, path: string): WorkspaceItemLink {
+  const record = readObject(value, path);
+  const to = record.to === "space" ? "space" : readId(record.to, `${path}.to`);
+  return {
+    to,
+    rel: readEnum(record.rel, WORKSPACE_LINK_RELS, `${path}.rel`),
+  };
+}
+
+function readWorkspaceItem(value: unknown, path: string): WorkspaceItem {
+  const record = readObject(value, path);
+  const kind = readEnum(record.kind, WORKSPACE_ITEM_KINDS, `${path}.kind`);
+  let sourceId: string | undefined;
+  if (record.sourceId !== undefined) {
+    if (kind !== "source") {
+      fail(`${path}.sourceId`, 'is only allowed on kind "source"');
+    }
+    const candidate = readString(record.sourceId, `${path}.sourceId`, { max: 128 });
+    if (!isSourceId(candidate)) fail(`${path}.sourceId`, "must be a UUID");
+    sourceId = candidate;
+  }
+  if (kind === "source" && sourceId === undefined) {
+    fail(`${path}.sourceId`, 'is required for kind "source"');
+  }
+  const sha256 = record.sha256 === undefined ? undefined : (() => {
+    const digest = readString(record.sha256, `${path}.sha256`, { max: 64, min: 64 });
+    if (!SHA256_PATTERN.test(digest)) fail(`${path}.sha256`, "must be a lowercase hex SHA-256 digest");
+    return digest;
+  })();
+  const links = readArray(record.links, `${path}.links`).map((entry, index) =>
+    readWorkspaceItemLink(entry, `${path}.links[${index}]`),
+  );
+  const seenLinks = new Set<string>();
+  for (const [index, link] of links.entries()) {
+    const key = `${link.rel}:${link.to}`;
+    if (seenLinks.has(key)) fail(`${path}.links[${index}]`, `duplicate link "${key}"`);
+    seenLinks.add(key);
+  }
+  return {
+    id: readWorkspaceItemId(record.id, `${path}.id`),
+    kind,
+    title: readString(record.title, `${path}.title`, { max: MAX_WORKSPACE_ITEM_TITLE_LENGTH }),
+    ...(record.byteSize === undefined
+      ? {}
+      : { byteSize: readInteger(record.byteSize, `${path}.byteSize`) }),
+    ...(sha256 === undefined ? {} : { sha256 }),
+    ...(sourceId === undefined ? {} : { sourceId }),
+    addedAt: readTimestamp(record.addedAt, `${path}.addedAt`),
+    addedBy: readAddedBy(record.addedBy, `${path}.addedBy`),
+    ...(record.caption === undefined
+      ? {}
+      : { caption: readString(record.caption, `${path}.caption`, { max: 2000 }) }),
+    links,
+  };
+}
+
+function readWorkspaceManifestValue(value: unknown): WorkspaceManifest {
+  const path = "manifest";
+  const record = readObject(value, path);
+  const schemaVersion = record.schemaVersion;
+  if (!Number.isSafeInteger(schemaVersion) || (schemaVersion as number) < 1) {
+    fail(`${path}.schemaVersion`, "must be a positive integer");
+  }
+  const items = readArray(record.items, `${path}.items`);
+  if (items.length > MAX_WORKSPACE_ITEMS) {
+    fail(`${path}.items`, `a workspace carries at most ${MAX_WORKSPACE_ITEMS} items`);
+  }
+  const parsedItems = items.map((entry, index) => readWorkspaceItem(entry, `${path}.items[${index}]`));
+  // Two items share one content file when their ids collide; that is corrupt.
+  const seenIds = new Set<string>();
+  for (const [index, item] of parsedItems.entries()) {
+    if (seenIds.has(item.id)) fail(`${path}.items[${index}]`, `duplicate item id "${item.id}"`);
+    seenIds.add(item.id);
+  }
+  return {
+    schemaVersion: schemaVersion as number,
+    pathId: readId(record.pathId, `${path}.pathId`),
+    updatedAt: readTimestamp(record.updatedAt, `${path}.updatedAt`),
+    items: parsedItems,
+  };
+}
+
+/** Validate a workspace manifest without throwing; invalid input yields precise issues. */
+export function validateWorkspaceManifest(value: unknown): ValidationResult<WorkspaceManifest> {
+  try {
+    return { ok: true, value: readWorkspaceManifestValue(value) };
+  } catch (error) {
+    if (error instanceof DomainValidationError) return { ok: false, issues: error.issues };
+    throw error;
+  }
+}
+
+/** Validate a workspace manifest, throwing `DomainValidationError`. */
+export function parseWorkspaceManifest(value: unknown): WorkspaceManifest {
+  return readWorkspaceManifestValue(value);
+}
+
+/** Validate one workspace item, throwing `DomainValidationError`. */
+export function parseWorkspaceItem(value: unknown): WorkspaceItem {
+  return readWorkspaceItem(value, "item");
 }
 
 /** Human-readable anchor, e.g. `OSTEP — chapter 26, section 27.1, pages 301-320`. */

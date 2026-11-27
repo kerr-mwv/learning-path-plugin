@@ -6,7 +6,6 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { PluginTreeRow } from "learnharness-plugin-api";
 import type { NativeSessionHost } from "../src/native-session-host.ts";
 import {
   clearPathHubTarget,
@@ -14,7 +13,7 @@ import {
 } from "../src/session-navigation.ts";
 import { mountPathHub } from "../src/view/path-hub.ts";
 import { makePath } from "./fixtures.ts";
-import { createViewFixture } from "./view-host.ts";
+import { createViewFixture, selectRoadmapCard } from "./view-host.ts";
 import type { ViewFixture } from "./view-host.ts";
 
 function fakeHost(fixture: ViewFixture): NativeSessionHost & {
@@ -52,21 +51,6 @@ async function mounted(fixture: ViewFixture, host?: NativeSessionHost): Promise<
   return fixture.root;
 }
 
-function row(fixture: ViewFixture, key: string): PluginTreeRow {
-  const tree = fixture.find("mountTree");
-  const rows: PluginTreeRow[] = [];
-  const visit = (entries: readonly PluginTreeRow[]) => {
-    for (const entry of entries) {
-      rows.push(entry);
-      if (entry.children) visit(entry.children);
-    }
-  };
-  visit(tree.props.rows as readonly PluginTreeRow[]);
-  const found = rows.find((entry) => entry.key === key);
-  assert.ok(found, `Missing row ${key}`);
-  return found;
-}
-
 function button(fixture: ViewFixture, label: string) {
   const found = fixture.all("mountButton").find((record) => record.props.label === label);
   assert.ok(found, `Missing button ${label}`);
@@ -85,7 +69,7 @@ test("Start Teaching Chat creates, links, stages and opens a native session", as
   try {
     const host = fakeHost(fixture);
     await mounted(fixture, host);
-    await row(fixture, "node:n-skill").selection!.onChange(true);
+    selectRoadmapCard(fixture.root, "n-skill");
     await fixture.flush();
     assert.equal(inspector(fixture).dataset.nodeId, "n-skill");
 
@@ -116,19 +100,10 @@ test("a deleted native chat is marked missing and can be unlinked without touchi
   try {
     assert.equal(fixture.nativeChats.delete("chat-1"), true);
     await mounted(fixture);
-    await row(fixture, "node:n-concept").selection!.onChange(true);
+    selectRoadmapCard(fixture.root, "n-concept");
     await fixture.flush();
 
     assert.match(inspector(fixture).textContent ?? "", /Missing native chat/);
-    const tree = fixture.find("mountTree");
-    const chatRow = (tree.props.rows as PluginTreeRow[])
-      .flatMap((module) => module.children ?? [])
-      .flatMap((node) => node.children ?? [])
-      .find((entry) => entry.key === "chat:n-concept:chat-1");
-    assert.ok(chatRow);
-    const content = tree.treeContents.find((entry) => entry.key === "chat:n-concept:chat-1");
-    assert.ok(content);
-    assert.match(content.container.textContent ?? "", /\(missing\)/);
 
     await button(fixture, "Actions").props.onClick();
     const menu = fixture.find("openMenu");
@@ -162,7 +137,7 @@ test("Link Existing Session offers only unlinked chats and attaches the chosen o
   });
   try {
     await mounted(fixture);
-    await row(fixture, "node:n-skill").selection!.onChange(true);
+    selectRoadmapCard(fixture.root, "n-skill");
     await fixture.flush();
 
     await button(fixture, "Link Existing Session…").props.onClick();

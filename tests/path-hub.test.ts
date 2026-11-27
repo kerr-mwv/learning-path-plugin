@@ -1,19 +1,19 @@
 /** Path Hub frontend tests.
  *
  * Public-API test double only: the real view is mounted against a recorded host
- * UI and an in-memory JSON backend. These tests prove disposal, tree rendering
- * and navigation, Architect chat state, document-conversion failures and
+ * UI and an in-memory JSON backend. These tests prove disposal, roadmap
+ * rendering and navigation, Architect chat state, document-conversion failures and
  * `onResync` recovery without a browser or a model request.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { PluginAgentSnapshot, PluginTreeRow } from "learnharness-plugin-api";
+import type { PluginAgentSnapshot } from "learnharness-plugin-api";
 import { mountPathHub } from "../src/view/path-hub.ts";
 import { effectiveArtifact } from "../src/view/node-inspector.ts";
 import { ARTIFACT_CATALOG } from "../src/domain.ts";
 import type { LearningPath } from "../src/domain.ts";
 import { makePath } from "./fixtures.ts";
-import { createViewFixture, fire, makeConversation, setSelect } from "./view-host.ts";
+import { createViewFixture, fire, makeConversation, roadmapCard, selectRoadmapCard, setSelect } from "./view-host.ts";
 import type { MountRecord, ViewFixture } from "./view-host.ts";
 
 function assistant(text: string): PluginAgentSnapshot["messages"][number] {
@@ -31,22 +31,23 @@ function snapshot(id: string, overrides: Partial<PluginAgentSnapshot> = {}): Plu
   return makeConversation(id, overrides);
 }
 
-function allRows(tree: MountRecord): PluginTreeRow[] {
-  const rows: PluginTreeRow[] = [];
-  const visit = (entries: readonly PluginTreeRow[]) => {
-    for (const row of entries) {
-      rows.push(row);
-      if (row.children) visit(row.children);
-    }
-  };
-  visit(tree.props.rows as readonly PluginTreeRow[]);
-  return rows;
+function liveButtons(fixture: ViewFixture): MountRecord[] {
+  return fixture.all("mountButton");
 }
 
-function row(tree: MountRecord, key: string): PluginTreeRow {
-  const found = allRows(tree).find((entry) => entry.key === key);
-  assert.ok(found, `Missing tree row ${key}; have ${allRows(tree).map((entry) => entry.key).join(", ")}`);
-  return found;
+/** A pointer event carrying the fields the bar's drag handler reads; the
+ * test double's generic Event carries none of them by default. */
+function pointerEvent(
+  document: Document,
+  type: string,
+  fields: { pointerId?: number; clientX?: number; clientY?: number; button?: number } = {},
+): Event {
+  const event = document.createEvent("Event");
+  event.initEvent(type, true, true);
+  for (const [key, value] of Object.entries(fields)) {
+    Object.defineProperty(event, key, { configurable: true, value });
+  }
+  return event;
 }
 
 async function mounted(fixture: ViewFixture): Promise<HTMLElement> {
@@ -57,11 +58,7 @@ async function mounted(fixture: ViewFixture): Promise<HTMLElement> {
   return container;
 }
 
-function liveButtons(fixture: ViewFixture): MountRecord[] {
-  return fixture.all("mountButton");
-}
-
-test("Path Hub mounts every surface and disposes widgets, tree content and listeners on unmount", async () => {
+test("Path Hub mounts every surface and disposes widgets, roadmap cards and listeners on unmount", async () => {
   const path = makePath();
   const fixture = createViewFixture({
     paths: [path],
@@ -70,17 +67,26 @@ test("Path Hub mounts every surface and disposes widgets, tree content and liste
   try {
     const container = await mounted(fixture);
 
-    const tree = fixture.find("mountTree");
-    assert.equal(tree.props.label, "Path hierarchy");
-    assert.equal(tree.props.header, "Path");
-    assert.deepEqual(tree.props.columns, [{ key: "state", header: "State", width: 136 }]);
-    assert.equal(tree.signal, fixture.context.signal);
+    assert.equal(fixture.all("mountTree").length, 0, "the host tree widget is gone from the Path Hub");
+    assert.equal(
+      container.querySelector<HTMLElement>(".lp-path-pane .lp-pane-title")!.textContent,
+      "Path roadmap",
+      "the roadmap is the path pane's lens, not a tree",
+    );
+    const lanes = container.querySelectorAll<HTMLElement>(".lp-lane");
+    assert.equal(lanes.length, 2, "makePath()'s two modules are lanes");
+    const cards = container.querySelectorAll<HTMLElement>(".lp-roadmap-card");
+    assert.equal(cards.length, 6, "every node is a card");
+    assert.ok(
+      [...cards].every((card) => card.tagName === "BUTTON" && card.getAttribute("type") === "button"),
+      "cards are real, keyboard-focusable buttons",
+    );
     assert.equal(fixture.all("mountStandardComposer").length, 1);
     assert.equal(fixture.all("mountMarkdown").length, 1, "the stored Architect turn is rendered as Markdown");
     assert.ok(liveButtons(fixture).some((button) => button.props.label === "Create a Path"));
     assert.ok(liveButtons(fixture).some((button) => button.props.label === "Refine Path"));
     assert.ok(liveButtons(fixture).some((button) => button.props.label === "Upload PDF or text"));
-    assert.ok(fixture.all("mountBadge").length >= 6, "node type and progression badges mount inside tree content");
+    assert.ok(fixture.all("mountBadge").length >= 12, "node type and progression badges mount inside the cards");
     assert.match(container.textContent ?? "", /1 of 6 nodes consolidated/);
 
     const callsBefore = fixture.calls.length;
@@ -91,7 +97,7 @@ test("Path Hub mounts every surface and disposes widgets, tree content and liste
     assert.ok(fixture.records.length > 0);
     assert.ok(
       fixture.records.every((record) => record.disposed >= 1),
-      "every ctx.ui handle, including tree content, is disposed exactly through its signal",
+      "every ctx.ui handle, including card badges, is disposed exactly through its signal",
     );
 
     fixture.emit("paths-changed", { id: path.id });
@@ -103,7 +109,7 @@ test("Path Hub mounts every surface and disposes widgets, tree content and liste
   }
 });
 
-test("tree renders modules, nodes and child chats with badges and preserves selection across updates", async () => {
+test("roadmap renders module lanes and node cards with badges and preserves selection across updates", async () => {
   const path = makePath();
   const fixture = createViewFixture({
     paths: [path],
@@ -111,30 +117,37 @@ test("tree renders modules, nodes and child chats with badges and preserves sele
   });
   try {
     await mounted(fixture);
-    const tree = fixture.find("mountTree");
+    const lanes = [...fixture.root.querySelectorAll<HTMLElement>(".lp-lane")];
     assert.deepEqual(
-      allRows(tree).map((entry) => entry.key),
-      [
-        "module:module-structure",
-        "node:n-holistic",
-        "node:n-concept",
-        "chat:n-concept:chat-1",
-        "node:n-skill",
-        "module:module-synthesis",
-        "node:n-contrast",
-        "node:n-checkpoint",
-        "node:n-bridge",
-      ],
+      lanes.map((lane) => lane.querySelector(".lp-lane-title")?.textContent),
+      ["Structure first", "Synthesis"],
     );
-    assert.equal(row(tree, "module:module-structure").content, "Structure first");
-    assert.equal(row(tree, "module:module-structure").cells?.state, "1/3 consolidated");
+    assert.match(lanes[0]!.textContent ?? "", /1\/3 consolidated/);
+    assert.match(lanes[1]!.textContent ?? "", /0\/3 consolidated/);
     assert.deepEqual(
-      fixture.all("mountBadge").slice(0, 6).map((badge) => badge.props.text),
+      [...fixture.root.querySelectorAll<HTMLElement>(".lp-roadmap-card")].map(
+        (card) => card.dataset.nodeId,
+      ),
+      ["n-holistic", "n-concept", "n-skill", "n-contrast", "n-checkpoint", "n-bridge"],
+    );
+    assert.match(
+      roadmapCard(fixture.root, "n-concept").textContent ?? "",
+      /1 teaching/,
+      "child chats are counted on the card where they are linked",
+    );
+    assert.deepEqual(
+      fixture
+        .all("mountBadge")
+        // Card badges mount into `lp-badge-row` hosts; overview and inspector
+        // badges use `lp-badge-host`, so this scopes the assertion.
+        .filter((badge) => badge.container.closest(".lp-roadmap-card") !== null)
+        .slice(0, 6)
+        .map((badge) => badge.props.text),
       ["Holistic", "Consolidated", "Concept", "In progress", "Skill", "Unstarted"],
     );
 
     const initialArchitectCalls = fixture.calls.filter((call) => call.name.startsWith("architect")).length;
-    await row(tree, "node:n-concept").selection!.onChange(true);
+    const conceptCard = selectRoadmapCard(fixture.root, "n-concept");
     await fixture.flush();
     const inspector = fixture.root.querySelector<HTMLElement>(".lp-inspector")!;
     assert.equal(inspector.dataset.nodeId, "n-concept");
@@ -148,32 +161,54 @@ test("tree renders modules, nodes and child chats with badges and preserves sele
       "micro_code",
     );
 
+    assert.equal(
+      roadmapCard(fixture.root, "n-concept").getAttribute("aria-pressed"),
+      "true",
+      "the selected card is marked",
+    );
+    assert.match(roadmapCard(fixture.root, "n-concept").className, /lp-roadmap-card-selected/);
+    assert.equal(
+      roadmapCard(fixture.root, "n-concept"),
+      conceptCard,
+      "selection repaints in place, so keyboard focus stays on the card",
+    );
+
     const interleaved = liveButtons(fixture).find((button) => button.props.label === "Node n-holistic");
     assert.ok(interleaved, "interleaved prior nodes are followable links");
     await interleaved.props.onClick();
     assert.equal(fixture.root.querySelector<HTMLElement>(".lp-inspector")!.dataset.nodeId, "n-holistic");
+    assert.equal(roadmapCard(fixture.root, "n-holistic").getAttribute("aria-pressed"), "true");
+    assert.equal(roadmapCard(fixture.root, "n-concept").getAttribute("aria-pressed"), "false");
 
-    await row(tree, "module:module-structure").disclosure!.onChange(false);
-    assert.equal(row(tree, "module:module-structure").disclosure!.expanded, false);
-    assert.equal(row(tree, "node:n-holistic").selection!.checked, true, "selection survives collapse/re-render");
+    // A path refresh rebuilds the cards; the selection belongs to the hub, not
+    // to the DOM, so it survives the re-render with the inspector intact.
+    fixture.emit("paths-changed", { id: path.id });
+    await fixture.flush();
+    assert.equal(
+      roadmapCard(fixture.root, "n-holistic").getAttribute("aria-pressed"),
+      "true",
+      "selection survives a roadmap re-render",
+    );
     assert.equal(
       fixture.root.querySelector<HTMLElement>(".lp-inspector")!.dataset.nodeId,
       "n-holistic",
-      "collapsing the tree never clears the inspector selection",
+      "re-rendering the roadmap never clears the inspector selection",
     );
-    await row(tree, "module:module-structure").disclosure!.onChange(true);
-    assert.equal(row(tree, "module:module-structure").disclosure!.expanded, true);
 
-    const chatButton = liveButtons(fixture).find(
-      (button) => button.props.label === "Open" && button.container.closest(".lp-tree-chat"),
-    );
-    assert.ok(chatButton, "child-chat rows expose a navigation action inside the tree");
-    await chatButton.props.onClick();
+    // Child chats stay openable from the inspector that the card selected into.
+    selectRoadmapCard(fixture.root, "n-concept");
+    await fixture.flush();
+    await liveButtons(fixture).find((button) => button.props.label === "Actions")!.props.onClick();
+    const menu = fixture.find("openMenu");
+    assert.equal(menu.props.label, "Session actions for First teaching chat");
+    const open = menu.props.items.find((item: { key: string }) => item.key === "open");
+    assert.ok(open, "a linked child chat exposes a navigation action in the inspector");
+    await open.onSelect();
     assert.deepEqual(fixture.openedSessions, ["chat-1"]);
     assert.equal(
       fixture.calls.filter((call) => call.name.startsWith("architect")).length,
       initialArchitectCalls,
-      "tree navigation and expansion never refetch or restart the Architect",
+      "roadmap navigation never refetches or restarts the Architect",
     );
   } finally {
     fixture.restore();
@@ -185,8 +220,7 @@ test("node inspector persists progression and artifact choices and refreshes bad
   const fixture = createViewFixture({ paths: [path], conversations: [snapshot("chat-architect")] });
   try {
     await mounted(fixture);
-    const tree = fixture.find("mountTree");
-    await row(tree, "node:n-concept").selection!.onChange(true);
+    selectRoadmapCard(fixture.root, "n-concept");
 
     const progression = fixture.root.querySelector<HTMLSelectElement>('select[aria-label="Progression"]')!;
     setSelect(progression, "consolidated");
@@ -197,12 +231,15 @@ test("node inspector persists progression and artifact choices and refreshes bad
       progression: "consolidated",
     });
     assert.match(fixture.root.textContent ?? "", /2 of 6 nodes consolidated · 1 in progress/);
-    const conceptRow = row(fixture.find("mountTree"), "node:n-concept");
-    assert.equal(conceptRow.cells?.state, "Consolidated");
     assert.ok(
       fixture
         .all("mountBadge")
-        .some((badge) => badge.props.text === "Consolidated" && badge.container.closest(".lp-tree-node")),
+        .some(
+          (badge) =>
+            badge.props.text === "Consolidated" &&
+            badge.container.closest(".lp-roadmap-card")?.getAttribute("aria-pressed") === "true",
+        ),
+      "the selected card's progression badge updates with the record",
     );
 
     const artifact = fixture.root.querySelector<HTMLSelectElement>('select[aria-label="Artifact type"]')!;
@@ -560,20 +597,430 @@ test("onResync re-reads paths and the Architect conversation after missed notifi
   }
 });
 
-test("an empty hub offers Create a Path and does not invent a tree or inspector node", async () => {
+test("the detailed view floats: it never squeezes the roadmap, and Close deselects", async () => {
+  const path = makePath();
+  const fixture = createViewFixture({
+    paths: [path],
+    conversations: [snapshot("chat-architect")],
+  });
+  try {
+    await mounted(fixture);
+
+    // The inspector is a floating sibling of the body, not a grid column, so
+    // the roadmap and the Architect conversation keep their full width.
+    const body = fixture.root.querySelector<HTMLElement>(".lp-hub-body")!;
+    const pane = fixture.root.querySelector<HTMLElement>(".lp-inspector-pane")!;
+    assert.notEqual(pane.parentElement, body, "the detailed view is not a body column");
+    assert.equal(pane.hidden, false, "the first selected node opens the floating details");
+
+    const close = liveButtons(fixture).find((button) => button.props.label === "Close")!;
+    assert.ok(close, "the floating pane carries a close control");
+    await close.props.onClick();
+    await fixture.flush();
+
+    assert.equal(pane.hidden, true, "closing deselects and hides the floating window");
+    assert.ok(!fixture.root.querySelector<HTMLElement>(".lp-inspector")!.dataset.nodeId);
+    assert.equal(roadmapCard(fixture.root, "n-holistic").getAttribute("aria-pressed"), "false");
+
+    // The live app refreshes in the background (notifications, resync). A
+    // closed detailed view must stay closed instead of silently reselecting.
+    fixture.emit("paths-changed", { id: path.id });
+    await fixture.flush();
+    fixture.resync();
+    await fixture.flush();
+    assert.equal(pane.hidden, true, "a background refresh never reopens the closed window");
+    assert.ok(!fixture.root.querySelector<HTMLElement>(".lp-inspector")!.dataset.nodeId);
+    assert.equal(
+      body.querySelectorAll<HTMLElement>(":scope > *").length,
+      2,
+      "the body keeps exactly the roadmap pane and the Architect pane — the details and their workspace tab float",
+    );
+
+    // Reopening via a card click brings the same inspector back.
+    await selectRoadmapCard(fixture.root, "n-concept");
+    assert.equal(pane.hidden, false);
+    assert.equal(fixture.root.querySelector<HTMLElement>(".lp-inspector")!.dataset.nodeId, "n-concept");
+  } finally {
+    fixture.restore();
+  }
+});
+
+test("the floating details auto-hide their title bar on scroll and expand on demand", async () => {
+  const path = makePath();
+  const fixture = createViewFixture({
+    paths: [path],
+    conversations: [snapshot("chat-architect")],
+  });
+  try {
+    await mounted(fixture);
+
+    // The frame carries a drag grip; an inner scroller owns the overflow so
+    // the grip never scrolls with the content, and the bar sits inside it.
+    const pane = fixture.root.querySelector<HTMLElement>(".lp-inspector-pane")!;
+    const scroller = pane.querySelector<HTMLElement>(".lp-inspector-scroll")!;
+    const bar = pane.querySelector<HTMLElement>(".lp-inspector-bar")!;
+    assert.ok(pane.querySelector(".lp-inspector-grip"), "the frame exposes a resize grip");
+    assert.ok(!bar.classList.contains("lp-inspector-bar-hidden"), "the bar starts visible");
+
+    // Scrolling down past the threshold fades the bar out of the way…
+    scroller.scrollTop = 100;
+    fire(scroller, "scroll");
+    assert.ok(bar.classList.contains("lp-inspector-bar-hidden"), "scrolling down hides the bar");
+
+    // …and scrolling back up brings the title, Expand and Close back.
+    scroller.scrollTop = 40;
+    fire(scroller, "scroll");
+    assert.ok(!bar.classList.contains("lp-inspector-bar-hidden"), "scrolling up restores the bar");
+
+    // Switching nodes rewinds to the top with the bar in place.
+    scroller.scrollTop = 100;
+    fire(scroller, "scroll");
+    assert.ok(bar.classList.contains("lp-inspector-bar-hidden"));
+    await selectRoadmapCard(fixture.root, "n-concept");
+    assert.ok(!bar.classList.contains("lp-inspector-bar-hidden"), "a fresh node starts unscrolled");
+
+    // Expand stretches the window across the hub; Restore brings it back. Both
+    // are icon-only: the label stays the accessible name, the icon points to
+    // the corners when collapsed and inward when stretched.
+    const expand = liveButtons(fixture).find((button) => button.props.label === "Expand")!;
+    assert.ok(expand, "the bar carries an expand control");
+    assert.equal(expand.props.iconOnly, true, "the expand control is an icon-only button");
+    assert.match(String(expand.props.icon ?? ""), /M8 3H5/, "the expand icon points to the corners");
+    assert.equal(pane.style.top, "12px", "the floating window pins under the header");
+    await expand.props.onClick();
+    assert.ok(pane.classList.contains("lp-inspector-expanded"), "expanding widens the window");
+    assert.equal(
+      pane.style.top,
+      "12px",
+      "the expanded window keeps the same measured pin — just below the header, flush at the viewport margin once the page scrolls past it — so its bar never tucks under the header (zero rects here pin the margin)",
+    );
+    const restore = liveButtons(fixture).find((button) => button.props.label === "Restore")!;
+    assert.ok(restore, "the expand control becomes a restore control");
+    assert.match(String(restore.props.icon ?? ""), /M8 3v3/, "the restore icon points inward");
+    await restore.props.onClick();
+    assert.ok(!pane.classList.contains("lp-inspector-expanded"), "restoring returns to the half");
+    assert.equal(pane.style.top, "12px", "restoring brings the measured pin back");
+
+    // Close is an X, and still deselects with the new bar layout.
+    const close = liveButtons(fixture).find((button) => button.props.label === "Close")!;
+    assert.equal(close.props.iconOnly, true, "the close control is an icon-only button");
+    assert.match(String(close.props.icon ?? ""), /M18 6 6 18/, "the close icon is an X");
+    await close.props.onClick();
+    await fixture.flush();
+    assert.equal(pane.hidden, true, "close keeps working from the auto-hiding bar");
+  } finally {
+    fixture.restore();
+  }
+});
+
+test("dragging the bar moves the window vertically and horizontally; double-click resets", async () => {
+  const path = makePath();
+  const fixture = createViewFixture({ paths: [path] });
+  try {
+    await mounted(fixture);
+    const pane = fixture.root.querySelector<HTMLElement>(".lp-inspector-pane")!;
+    const bar = pane.querySelector<HTMLElement>(".lp-inspector-bar")!;
+    // Zero rects in the test host pin the window at the viewport margin; the
+    // horizontal offset rides the same mechanism (left is only set from a
+    // measured hub rect, which this host does not provide).
+    assert.equal(pane.style.top, "12px");
+
+    const doc = fixture.root.ownerDocument;
+    // Drag down 100, then back up 40 within the same press.
+    bar.dispatchEvent(pointerEvent(doc, "pointerdown", { pointerId: 7, clientX: 300, clientY: 20, button: 0 }));
+    bar.dispatchEvent(pointerEvent(doc, "pointermove", { pointerId: 7, clientX: 300, clientY: 120 }));
+    assert.equal(pane.style.top, "112px", "the window follows the drag downward");
+    bar.dispatchEvent(pointerEvent(doc, "pointermove", { pointerId: 7, clientX: 250, clientY: 60 }));
+    assert.equal(pane.style.top, "52px", "the offset rides along, up and down");
+    bar.dispatchEvent(pointerEvent(doc, "pointerup", { pointerId: 7 }));
+
+    // The dragged offset survives a background refresh.
+    fixture.emit("paths-changed", { id: path.id });
+    await fixture.flush();
+    assert.equal(pane.style.top, "52px", "refreshes keep the dragged position");
+
+    // Never above the viewport margin, however far up the pointer goes.
+    bar.dispatchEvent(pointerEvent(doc, "pointerdown", { pointerId: 8, clientX: 300, clientY: 40, button: 0 }));
+    bar.dispatchEvent(pointerEvent(doc, "pointermove", { pointerId: 8, clientX: 300, clientY: -600 }));
+    assert.equal(pane.style.top, "12px", "the window never leaves the viewport");
+    bar.dispatchEvent(pointerEvent(doc, "pointerup", { pointerId: 8 }));
+
+    // A double-click on the bar puts the window back where it pins.
+    bar.dispatchEvent(pointerEvent(doc, "pointerdown", { pointerId: 9, clientX: 300, clientY: 20, button: 0 }));
+    bar.dispatchEvent(pointerEvent(doc, "pointermove", { pointerId: 9, clientX: 300, clientY: 120 }));
+    bar.dispatchEvent(pointerEvent(doc, "pointerup", { pointerId: 9 }));
+    assert.equal(pane.style.top, "112px");
+    fire(bar, "dblclick");
+    assert.equal(pane.style.top, "12px", "a double-click resets the pinned default");
+
+    // A press on a tab is the tab's own, never a window move.
+    const tab = bar.querySelector<HTMLElement>(".lp-tab")!;
+    tab.dispatchEvent(pointerEvent(doc, "pointerdown", { pointerId: 10, clientX: 30, clientY: 20, button: 0 }));
+    tab.dispatchEvent(pointerEvent(doc, "pointermove", { pointerId: 10, clientX: 30, clientY: 220 }));
+    assert.equal(pane.style.top, "12px", "the tab's own press is not a window move");
+    tab.dispatchEvent(pointerEvent(doc, "pointerup", { pointerId: 10 }));
+  } finally {
+    fixture.restore();
+  }
+});
+
+test("the floating window stays below the host's standing view header while the view scrolls", async () => {
+  const path = makePath();
+  const fixture = createViewFixture({ paths: [path] });
+  try {
+    // The real host keeps its view header ("Learning Paths") standing above
+    // the plugin's own scrolling region: a static top bar beside a scroll
+    // container, so scrolling the region never moves the header. This test
+    // host has no layout engine, so the chrome is stubbed to that shape.
+    const doc = fixture.root.ownerDocument;
+    const topBar = doc.createElement("header");
+    topBar.textContent = "Learning Paths";
+    const scrollRegion = doc.createElement("div");
+    topBar.getBoundingClientRect = () =>
+      ({ top: 0, bottom: 60, left: 0, right: 1024, width: 1024, height: 60, x: 0, y: 0, toJSON() {} }) as DOMRect;
+    scrollRegion.getBoundingClientRect = () =>
+      ({ top: 60, bottom: 800, left: 0, right: 1024, width: 1024, height: 740, x: 0, y: 60, toJSON() {} }) as DOMRect;
+    Object.defineProperty(scrollRegion, "scrollHeight", { value: 4000 });
+    Object.defineProperty(scrollRegion, "clientHeight", { value: 740 });
+    doc.body.insertBefore(topBar, fixture.root);
+    doc.body.insertBefore(scrollRegion, fixture.root);
+    scrollRegion.append(fixture.root);
+    const view = doc.defaultView as unknown as {
+      getComputedStyle?: (candidate: Element) => { position: string; overflowY: string };
+    };
+    view.getComputedStyle = (candidate: Element) => ({
+      position: "static",
+      overflowY: candidate === (scrollRegion as Element) ? "auto" : "visible",
+    });
+
+    await mounted(fixture);
+    await selectRoadmapCard(fixture.root, "n-skill");
+    const pane = fixture.root.querySelector<HTMLElement>(".lp-inspector-pane")!;
+    assert.equal(pane.style.top, "72px", "the pin clears the standing header (60 + 12 breathing room)");
+
+    // Scrolling the plugin's own region re-pins under the header instead of
+    // jumping to the viewport top, in both window shapes.
+    fire(scrollRegion, "scroll");
+    assert.equal(pane.style.top, "72px", "scrolling keeps the window under the standing header");
+    const expand = liveButtons(fixture).find((button) => button.props.label === "Expand")!;
+    await expand.props.onClick();
+    assert.equal(pane.style.top, "72px", "the expanded window clears the standing header too");
+    const restore = liveButtons(fixture).find((button) => button.props.label === "Restore")!;
+    await restore.props.onClick();
+
+    // Dragging up cannot tuck the window under the header either.
+    const bar = pane.querySelector<HTMLElement>(".lp-inspector-bar")!;
+    bar.dispatchEvent(pointerEvent(doc, "pointerdown", { pointerId: 11, clientX: 300, clientY: 80, button: 0 }));
+    bar.dispatchEvent(pointerEvent(doc, "pointermove", { pointerId: 11, clientX: 300, clientY: -400 }));
+    assert.equal(pane.style.top, "72px", "a drag never lifts the window above the header pin");
+    bar.dispatchEvent(pointerEvent(doc, "pointerup", { pointerId: 11 }));
+  } finally {
+    fixture.restore();
+  }
+});
+
+test("the floating window stays below host chrome that is stuck over the scrolling content", async () => {
+  const path = makePath();
+  const fixture = createViewFixture({ paths: [path] });
+  try {
+    await mounted(fixture);
+
+    // Other hosts pin their header over the content with position: sticky.
+    // The chrome is stubbed: a sticky header element above the plugin's
+    // container with a measured-looking rect, and a getComputedStyle that
+    // reports its position.
+    const doc = fixture.root.ownerDocument;
+    const hostHeader = doc.createElement("header");
+    hostHeader.className = "host-view-header";
+    hostHeader.textContent = "Learning Paths";
+    hostHeader.getBoundingClientRect = () =>
+      ({ top: 0, bottom: 56, left: 0, right: 1024, width: 1024, height: 56, x: 0, y: 0, toJSON() {} }) as DOMRect;
+    doc.body.insertBefore(hostHeader, fixture.root);
+    const view = doc.defaultView as unknown as {
+      getComputedStyle?: (candidate: Element) => { position: string; overflowY: string };
+    };
+    view.getComputedStyle = (candidate: Element) => ({
+      position: candidate === (hostHeader as Element) ? "sticky" : "static",
+      overflowY: "visible",
+    });
+
+    await selectRoadmapCard(fixture.root, "n-skill");
+    const pane = fixture.root.querySelector<HTMLElement>(".lp-inspector-pane")!;
+    assert.equal(pane.style.top, "68px", "the pin clears the stuck host header (56 + 12 breathing room)");
+
+    fire(fixture.root, "scroll");
+    assert.equal(pane.style.top, "68px", "scrolling keeps the window under the stuck header");
+  } finally {
+    fixture.restore();
+  }
+});
+
+test("an empty hub offers Create a Path and does not invent a roadmap or inspector node", async () => {
   const fixture = createViewFixture();
   try {
     await mounted(fixture);
     assert.equal(fixture.root.querySelector<HTMLElement>(".lp-architect-pane")!.hidden, false);
     assert.match(fixture.root.textContent ?? "", /No learning paths yet/);
     assert.match(fixture.root.querySelector<HTMLElement>(".lp-inspector")!.textContent ?? "", /Select a node/);
-    assert.equal(fixture.all("mountTree").length, 0, "no empty tree is mounted without a path");
+    assert.equal(
+      fixture.root.querySelectorAll(".lp-roadmap-card").length,
+      0,
+      "no empty roadmap is drawn without a path",
+    );
     const create = liveButtons(fixture).find((button) => button.props.label === "Create a Path")!;
     await create.props.onClick();
     await fixture.flush();
     assert.equal(fixture.conversations.size, 0, "opening a draft does not lock in the model yet");
     assert.equal(fixture.paths.size, 0, "the Architect creates paths through save_learning_path, not the header");
     assert.ok(fixture.all("mountMarkdown").length === 0);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test("Path Hub exports the selected path as JSON and Markdown from its menu", async () => {
+  const path = makePath();
+  const fixture = createViewFixture({ paths: [path] });
+  try {
+    const exported: { format: string; filename: string; content: string }[] = [];
+    mountPathHub(fixture.context, fixture.root, fixture.context.signal, {
+      onExport(item) {
+        exported.push(item);
+      },
+    });
+    await fixture.flush();
+
+    const exportButton = () =>
+      fixture.findLast("mountButton", (record) => record.props.label === "Export Path");
+    assert.equal(exportButton().props.disabled, false);
+    await exportButton().props.onClick();
+    const jsonMenu = fixture.findLast("openMenu");
+    assert.equal(jsonMenu.props.label, "Export learning path");
+    assert.equal(jsonMenu.props.preferredSide, "down");
+    assert.deepEqual(
+      jsonMenu.props.items.map((item: { key: string }) => item.key),
+      ["export-json", "export-markdown"],
+    );
+    await jsonMenu.props.items.find((item: { key: string }) => item.key === "export-json").onSelect();
+    await fixture.flush();
+
+    assert.deepEqual(fixture.calls.filter((call) => call.name === "paths.export").at(-1)?.input, {
+      pathId: path.id,
+      format: "json",
+    });
+    assert.equal(exported.length, 1);
+    assert.equal(exported[0]!.format, "json");
+    assert.equal(exported[0]!.filename, "linear-algebra-from-canon.json");
+    assert.equal(JSON.parse(exported[0]!.content).id, path.id);
+
+    await exportButton().props.onClick();
+    const markdownMenu = fixture.findLast("openMenu");
+    await markdownMenu.props.items
+      .find((item: { key: string }) => item.key === "export-markdown")
+      .onSelect();
+    await fixture.flush();
+
+    assert.deepEqual(fixture.calls.filter((call) => call.name === "paths.export").at(-1)?.input, {
+      pathId: path.id,
+      format: "markdown",
+    });
+    assert.equal(exported.length, 2);
+    assert.equal(exported[1]!.format, "markdown");
+    assert.equal(exported[1]!.filename, "linear-algebra-from-canon.md");
+    assert.match(exported[1]!.content, /^# Linear algebra from canon/);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test("Path Hub disables Export Path when there is no selected path", async () => {
+  const fixture = createViewFixture();
+  try {
+    mountPathHub(fixture.context, fixture.root, fixture.context.signal);
+    await fixture.flush();
+    const exportButton = fixture.find("mountButton", (record) => record.props.label === "Export Path");
+    assert.equal(exportButton.props.disabled, true);
+    await exportButton.props.onClick();
+    assert.equal(fixture.all("openMenu").length, 0);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test("Add to workspace converts the document and files it linked grounds to the node in view", async () => {
+  const path = makePath();
+  const fixture = createViewFixture({ paths: [path] });
+  try {
+    await mounted(fixture);
+    const button = liveButtons(fixture).find((record) => record.props.label === "Add to workspace");
+    assert.ok(button, "the Architect surface carries the workspace upload affordance");
+
+    await button!.props.onClick();
+    const input = fixture.root.querySelector<HTMLInputElement>('input[type="file"]')!;
+    assert.ok(input, "the affordance opens the shared native file picker");
+    fixture.toMarkdown = async () => ({
+      name: "paper.md",
+      markdown: "# Paper\n\nConverted text.",
+      notices: ["One image-only page was skipped."],
+    });
+    const file = new File(["# Paper"], "paper.md", { type: "text/markdown" });
+    Object.defineProperty(input, "files", { configurable: true, value: { item: () => file } });
+    fire(input, "change");
+    await fixture.flush();
+    await fixture.flush();
+
+    const dialog = fixture.all("openDialog").at(-1)!;
+    assert.match(String(dialog.props.title), /paper\.md/, "the filing dialog names the document");
+    assert.match(
+      fixture.root.textContent ?? "",
+      /One image-only page was skipped/,
+      "conversion notices surface in the dialog, as the sources flow surfaces them",
+    );
+    const save = liveButtons(fixture).find((record) => record.props.label === "Save to Workspace");
+    assert.ok(save);
+    assert.equal(save!.props.disabled, undefined, "conversion enables the save");
+    assert.equal(fixture.uploaded.length, 0, "no library write before the learner confirms");
+
+    await save!.props.onClick();
+    await fixture.flush();
+    await fixture.flush();
+
+    const call = fixture.calls.filter((entry) => entry.name === "workspace.saveSource").at(-1);
+    assert.deepEqual(call?.input, {
+      pathId: "path-linear-algebra",
+      name: "paper.md",
+      markdown: "# Paper\n\nConverted text.",
+      links: [{ to: "n-holistic", rel: "grounds" }],
+    }, "the node in view is the default grounds link; one learner write files everything");
+    assert.equal(fixture.uploaded.length, 1, "the document lives once, in the global library");
+
+    const status = () => fixture.root.querySelector<HTMLElement>(".lp-upload-status")!;
+    assert.match(status().textContent ?? "", /Filed paper\.md in the workspace/);
+    assert.match(status().textContent ?? "", /One image-only page was skipped/);
+    assert.equal(status().dataset.state, "success");
+  } finally {
+    fixture.restore();
+  }
+});
+
+test("Add to workspace without a selected path declines in the status line", async () => {
+  const fixture = createViewFixture({});
+  try {
+    await mounted(fixture);
+    const button = liveButtons(fixture).find((record) => record.props.label === "Add to workspace");
+    assert.ok(button, "the affordance stays available so it can explain itself");
+    await button!.props.onClick();
+    const input = fixture.root.querySelector<HTMLInputElement>('input[type="file"]')!;
+    const file = new File(["# Paper"], "paper.md", { type: "text/markdown" });
+    Object.defineProperty(input, "files", { configurable: true, value: { item: () => file } });
+    fire(input, "change");
+    await fixture.flush();
+
+    const status = () => fixture.root.querySelector<HTMLElement>(".lp-upload-status")!;
+    assert.match(status().textContent ?? "", /Select a path first/);
+    assert.equal(status().dataset.state, "error");
+    assert.equal(fixture.calls.filter((entry) => entry.name === "workspace.saveSource").length, 0);
+    assert.equal(fixture.uploaded.length, 0, "declining writes nothing");
   } finally {
     fixture.restore();
   }

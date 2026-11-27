@@ -1,0 +1,5 @@
+{"id":"arg_vlra01","premises":["n_vlra02"],"conclusion":"n_vlra04","provenance":[{"chatId":"src_velora01","messageId":""}],"createdAt":"2026-01-15T10:00:00.000Z"}
+{"id":"arg_vlra02","premises":["n_vlra03"],"conclusion":"n_vlra05","provenance":[{"chatId":"src_velora01","messageId":""}],"createdAt":"2026-01-15T10:00:00.000Z"}
+{"id":"arg_vlra03","premises":["n_vlra04","n_vlra05"],"conclusion":"n_vlra06","provenance":[{"chatId":"src_velora01","messageId":""}],"createdAt":"2026-01-15T10:00:00.000Z"}
+{"id":"arg_vlra04","premises":["n_vlra02","n_vlra03"],"conclusion":"n_vlra08","provenance":[{"chatId":"src_velora01","messageId":""}],"createdAt":"2026-01-15T10:00:00.000Z"}
+{"id":"arg_vlra05","premises":["n_vlra02"],"conclusion":"n_vlra09","provenance":[{"chatId":"src_velora01","messageId":""}],"createdAt":"2026-01-15T10:00:00.000Z"}

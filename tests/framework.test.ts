@@ -6,14 +6,16 @@ import {
   DomainValidationError,
   ERROR_CATEGORIES,
   NODE_TYPES,
+  parseLearningPath,
 } from "../src/domain.ts";
 import {
   buildArchitectSystemPrompt,
   buildChildSessionBrief,
+  mapRevisitBriefFor,
   microPrimingHookFor,
   resolveNodeArtifact,
 } from "../src/framework.ts";
-import { makePath } from "./fixtures.ts";
+import { ITEM_ID, ITEM_ID_2, ITEM_ID_3, makeItem, makeManifest, makePath } from "./fixtures.ts";
 
 /** FRAMEWORK.md principle 7: no pacing, calendar or gamified pressure language. */
 const PACING =
@@ -96,6 +98,40 @@ test("artifact resolution prefers the node, then the path, settings and catalog"
 
   const bridge = nodeOf(path, "n-bridge");
   assert.deepEqual(resolveNodeArtifact(noPathDefault, bridge, null), { type: "encoding_exercise" });
+});
+
+test("the brief lists learner workspace material by kind and title only", () => {
+  const path = makePath();
+  const workspace = makeManifest({
+    items: [
+      makeItem({ links: [{ to: "n-contrast", rel: "informs" }] }),
+      makeItem({
+        id: ITEM_ID_2,
+        kind: "code",
+        title: "Vector space sketch",
+        links: [{ to: "n-contrast", rel: "produced_by" }],
+      }),
+      makeItem({ id: ITEM_ID_3, title: "Unlinked margin note", links: [] }),
+    ],
+  });
+
+  const brief = buildChildSessionBrief({ path, nodeId: "n-contrast", kind: "teaching", workspace });
+  assert.match(brief.text, /## Learner workspace material/);
+  assert.match(brief.text, /- note: Feynman notes on vector spaces/);
+  assert.match(brief.text, /- code: Vector space sketch/);
+  assert.doesNotMatch(brief.text, /Unlinked margin note/, "only items linked to this node are listed");
+  assert.match(brief.text, /learning_path_read_workspace_item/);
+  assert.doesNotMatch(brief.text, /\bunread\b/);
+
+  // Titles only, never content: the brief carries no item bodies and no ids.
+  const section = brief.text.split("## Learner workspace material")[1]!.split("##")[0]!;
+  assert.doesNotMatch(section, new RegExp(ITEM_ID), "item ids stay out of the brief");
+  assert.doesNotMatch(section, /grounds|produced_by/, "link relations are not brief material");
+
+  const none = buildChildSessionBrief({ path, nodeId: "n-holistic", kind: "teaching", workspace });
+  assert.match(none.text, /No learner workspace material is linked to this node\./);
+  const noManifest = buildChildSessionBrief({ path, nodeId: "n-holistic", kind: "teaching" });
+  assert.match(noManifest.text, /No learner workspace material is linked to this node\./);
 });
 
 test("a child brief carries the anchor, pre-reading, priming, interleaving and watchpoints", () => {
@@ -186,4 +222,91 @@ test("a node with no unresolved errors still tells the session to probe", () => 
   const holistic = buildChildSessionBrief({ path, nodeId: "n-holistic", kind: "teaching" });
   assert.match(holistic.text, /No unresolved error is on record/);
   assert.deepEqual(holistic.watchpoints, []);
+});
+
+test("map revisit guidance never enters the learner-visible launch brief", () => {
+  const path = { ...makePath(), artifactDefault: null };
+  const brief = buildChildSessionBrief({
+    path,
+    nodeId: "n-contrast",
+    kind: "teaching",
+    settings: { artifactDefaults: {}, mapRevisitEnabled: true },
+  });
+  assert.equal(brief.artifact.type, "relational_map");
+  assert.doesNotMatch(brief.text, /earlier map|map revisit|keep, change or connect/i);
+});
+
+test("graph context in agent briefs is opt-in, relevant, bounded and explicitly withheld until an attempt", () => {
+  const path = makePath();
+  const node = nodeOf(path, "n-contrast");
+  (node as { title: string }).title = "Concurrency and parallelism";
+  const propositions = [
+    { id: "irrelevant", statement: "Photosynthesis converts light into chemical energy.", aliases: [] },
+    { id: "alias", statement: "Independent tasks can make progress in overlapping intervals.", aliases: ["Concurrency"] },
+    ...Array.from({ length: 12 }, (_, i) => ({ id: `p-${i}`, statement: "Concurrency is not the same as parallelism.", aliases: [] })),
+  ].map(p => ({ ...p, name: p.id, createdAt: "2026-01-01T00:00:00Z", provenance: [] }));
+  const base = { path, nodeId: node.id, kind: "teaching" as const };
+  const baseline = buildChildSessionBrief(base).text;
+  assert.equal(buildChildSessionBrief({ ...base, graphPropositions: propositions }).text, baseline);
+  assert.equal(buildChildSessionBrief({ ...base, settings: { artifactDefaults: {}, graphContextEnabled: true }, graphPropositions: [] }).text, baseline);
+  const brief = buildChildSessionBrief({ ...base, settings: { artifactDefaults: {}, graphContextEnabled: true }, graphPropositions: propositions });
+  assert.match(brief.text, /## Graph context — agent only/);
+  assert.doesNotMatch(brief.text, /Photosynthesis/);
+  assert.equal((brief.text.match(/"id":/g) ?? []).length, 5);
+  assert.match(brief.text, /never state a connection before the learner has tried/i);
+  assert.match(brief.text, /Prefer unlabelled problems/);
+  assert.match(brief.text, /quick recall question/);
+  assert.match(brief.text, /No skipping units/);
+});
+
+test("graph brief relevance includes the canonical source anchor and preserves light-use/map rules", () => {
+  const path = makePath();
+  const proposition = { id: "source", name: "Source context", statement: "OSTEP describes how operating systems virtualize resources.", aliases: [], createdAt: "2026-01-01T00:00:00Z", provenance: [] };
+  const settings = { artifactDefaults: {}, graphContextEnabled: true };
+  const graphPropositions = [proposition];
+  for (const nodeId of ["n-holistic", "n-skill", "n-bridge"]) {
+    const brief = buildChildSessionBrief({ path, nodeId, kind: "practice", settings, graphPropositions });
+    assert.match(brief.text, /OSTEP describes how operating systems virtualize resources/);
+    assert.match(brief.text, /For skill and bridge units, use graph context only for recall checks and watchpoints/);
+    assert.match(brief.text, /learner draws first/);
+    assert.match(brief.text, /artifactNote/);
+    assert.match(brief.text, /other artifacts, check connections in conversation before consolidated/);
+    assert.doesNotMatch(brief.text, PACING);
+  }
+});
+
+test("a valid long goal cannot crowd the source anchor out of graph relevance", () => {
+  const fixture = makePath();
+  const path = parseLearningPath({ ...fixture, modules: fixture.modules.map(module => ({ ...module, nodes: module.nodes.map(node => node.id === "n-concept"
+    ? { ...node, goal: "foundations ".repeat(333).trim(), sourceAnchor: { reference: "Velora", section: "Conservation" } } : node) })) });
+  const brief = buildChildSessionBrief({
+    path, nodeId: "n-concept", kind: "teaching", settings: { artifactDefaults: {}, graphContextEnabled: true },
+    graphPropositions: [{ id: "anchor-only", name: "Earlier source", statement: "Velora preserves quantities through reversible transformations.", aliases: [], createdAt: "2026-01-01T00:00:00Z", provenance: [] }],
+  });
+  assert.match(brief.text, /## Graph context — agent only/);
+  assert.match(brief.text, /Velora preserves quantities through reversible transformations/);
+});
+
+test("map revisit briefs cite saved relational maps and fall back to redraw-from-memory without them", () => {
+  const path = { ...makePath(), artifactDefault: null };
+  const artifact = resolveNodeArtifact(path, nodeOf(path, "n-contrast"));
+  const saved = [{ title: "First relational map", addedAt: "2026-02-01T00:00:00.000Z" }];
+
+  // Disabled, non-teaching, skill/bridge nodes and other artifacts stay silent.
+  assert.deepEqual(mapRevisitBriefFor("teaching", "contrast", artifact, false, saved), []);
+  assert.deepEqual(mapRevisitBriefFor("practice", "contrast", artifact, true, saved), []);
+  assert.deepEqual(mapRevisitBriefFor("teaching", "skill", artifact, true, saved), []);
+
+  // No saved maps: the original brief invites the learner to supply one.
+  const withoutSaved = mapRevisitBriefFor("teaching", "contrast", artifact, true);
+  assert.equal(withoutSaved.length, 1);
+  assert.match(withoutSaved[0]!, /supply an earlier map of their choice/);
+
+  // Saved maps are cited by title, read through the bounded tool, still ungated.
+  const withSaved = mapRevisitBriefFor("teaching", "contrast", artifact, true, saved);
+  assert.equal(withSaved.length, 1);
+  assert.match(withSaved[0]!, /"First relational map"/);
+  assert.match(withSaved[0]!, /learning_path_read_workspace_item/);
+  assert.match(withSaved[0]!, /Do not supply an earlier connection or open a saved map before that attempt/);
+  assert.match(withSaved[0]!, /Never scrape transcripts, treat artifactNote as the full map/);
 });

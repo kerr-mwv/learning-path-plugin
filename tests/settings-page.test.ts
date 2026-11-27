@@ -187,3 +187,123 @@ test("path deletion asks for confirmation and never touches native chats", async
     fixture.restore();
   }
 });
+
+test("experimental graph context toggle defaults off, saves, and restores after failure", async () => {
+  const fixture = createViewFixture();
+  try {
+    mountSettingsPage(fixture.context, fixture.root, fixture.context.signal);
+    await fixture.flush();
+    const toggle = () => artifactRow(liveRows(fixture, "graph-context-enabled"), "graph-context-enabled");
+    assert.equal(toggle().value, false);
+    assert.match(toggle().description, /questions.*attempt/i);
+    await toggle().onChange(true);
+    await fixture.flush();
+    assert.equal(fixture.settings.graphContextEnabled, true);
+    assert.equal(toggle().value, true);
+    await toggle().onChange(false);
+    await fixture.flush();
+    assert.equal(toggle().value, false);
+    const originalCall = fixture.context.call;
+    fixture.context.call = async () => { throw new Error("disk unavailable"); };
+    await toggle().onChange(true);
+    await fixture.flush();
+    assert.equal(toggle().value, false);
+    assert.match(fixture.root.textContent ?? "", /Could not save settings: disk unavailable/);
+    fixture.context.call = originalCall;
+    } finally {
+    fixture.restore();
+  }
+});
+
+test("experimental map revisit toggle defaults off, saves, and restores after failure", async () => {
+  const fixture = createViewFixture();
+  try {
+    mountSettingsPage(fixture.context, fixture.root, fixture.context.signal);
+    await fixture.flush();
+    const toggle = () => artifactRow(liveRows(fixture, "map-revisit-enabled"), "map-revisit-enabled");
+    assert.equal(toggle().value, false);
+    assert.match(toggle().description, /relational-map|continue normally/i);
+    await toggle().onChange(true);
+    await fixture.flush();
+    assert.equal(fixture.settings.mapRevisitEnabled, true);
+    assert.equal(toggle().value, true);
+    const originalCall = fixture.context.call;
+    fixture.context.call = async () => { throw new Error("disk unavailable"); };
+    await toggle().onChange(false);
+    await fixture.flush();
+    assert.equal(toggle().value, true);
+    assert.match(fixture.root.textContent ?? "", /Could not save settings: disk unavailable/);
+    fixture.context.call = originalCall;
+  } finally {
+    fixture.restore();
+  }
+});
+
+test("settings page exports a path as JSON and Markdown", async () => {
+  const path = makePath();
+  const fixture = createViewFixture({ paths: [path] });
+  try {
+    mountSettingsPage(fixture.context, fixture.root, fixture.context.signal);
+    await fixture.flush();
+
+    const jsonButton = () =>
+      fixture.findLast("mountButton", (record) => record.props.label === "Export JSON");
+    assert.equal(jsonButton().props.variant, "outline");
+    assert.equal(jsonButton().props.size, "xs");
+    await jsonButton().props.onClick();
+    await fixture.flush();
+
+    assert.deepEqual(fixture.calls.filter((call) => call.name === "paths.export").at(-1)?.input, {
+      pathId: path.id,
+      format: "json",
+    });
+    assert.match(
+      fixture.root.textContent ?? "",
+      /Exported "Linear algebra from canon" as JSON \(linear-algebra-from-canon\.json\)\./,
+    );
+
+    const markdownButton = () =>
+      fixture.findLast("mountButton", (record) => record.props.label === "Export Markdown");
+    assert.equal(markdownButton().props.variant, "outline");
+    assert.equal(markdownButton().props.size, "xs");
+    await markdownButton().props.onClick();
+    await fixture.flush();
+
+    assert.deepEqual(fixture.calls.filter((call) => call.name === "paths.export").at(-1)?.input, {
+      pathId: path.id,
+      format: "markdown",
+    });
+    assert.match(
+      fixture.root.textContent ?? "",
+      /Exported "Linear algebra from canon" as Markdown \(linear-algebra-from-canon\.md\)\./,
+    );
+  } finally {
+    fixture.restore();
+  }
+});
+
+test("graph toggle is disabled while its save is in flight", async () => {
+  const fixture = createViewFixture();
+  try {
+    mountSettingsPage(fixture.context, fixture.root, fixture.context.signal);
+    await fixture.flush();
+    const toggle = () => artifactRow(liveRows(fixture, "graph-context-enabled"), "graph-context-enabled");
+    const mapToggle = () => artifactRow(liveRows(fixture, "map-revisit-enabled"), "map-revisit-enabled");
+    const originalCall = fixture.context.call;
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    fixture.context.call = async (...args) => { await gate; return originalCall(...args); };
+    const pending = toggle().onChange(true);
+    assert.equal(toggle().disabled, true);
+    assert.equal(mapToggle().disabled, true);
+    assert.match(fixture.root.textContent ?? "", /Saving/);
+    finish();
+    await pending;
+    await fixture.flush();
+    assert.equal(toggle().disabled, false);
+    assert.equal(mapToggle().disabled, false);
+    assert.equal(toggle().value, true);
+  } finally {
+    fixture.restore();
+  }
+});

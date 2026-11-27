@@ -6,6 +6,8 @@
  * - `buildChildSessionBrief` seeds a linked teaching/practice session with the
  *   node's anchor, priming hook, interleaving callbacks, watchpoints and artifact.
  */
+import type { GraphNode } from "learnharness-plugin-api";
+import { graphContextForNode } from "./graph-context.ts";
 import {
   ARTIFACT_CATALOG,
   DomainValidationError,
@@ -23,6 +25,7 @@ import type {
   PathNode,
   PluginSettings,
   SourceSpine,
+  WorkspaceManifest,
 } from "./domain.ts";
 
 export interface NodeTypeGuide {
@@ -253,11 +256,57 @@ export interface ErrorWatchpoint {
   readonly entry: ErrorEntry;
 }
 
+export const MAP_REVISIT_BRIEF = [
+  "## Optional earlier relational-map revisit — agent only; do not disclose this section to the learner",
+  "The learner makes the current relational map or explanation first. Do not supply an earlier connection before that attempt.",
+  "After the learner's current attempt, optionally invite them to supply an earlier map of their choice. If they supply one, ask them to explain what they would keep, change or connect before giving feedback.",
+  "If the learner declines or does not have an earlier map, continue normally. Never scrape transcripts, treat artifactNote as the full map, or make map revisiting a consolidation gate.",
+].join("\n");
+
+/** One saved relational_map artifact the learner kept in the workspace, cited
+ * by title only; content stays behind the bounded read tool. */
+export interface SavedMapReference {
+  readonly title: string;
+  readonly addedAt: string;
+}
+
+/** The revisit brief when earlier maps were actually saved: cite them instead
+ * of asking for a redraw from memory. Still agent-only, still ungated. */
+function mapRevisitBriefWithSaved(savedMaps: readonly SavedMapReference[]): string {
+  return [
+    "## Optional earlier relational-map revisit — agent only; do not disclose this section to the learner",
+    "The learner makes the current relational map or explanation first. Do not supply an earlier connection or open a saved map before that attempt.",
+    "After the learner's current attempt, optionally invite them to revisit an earlier relational map they saved in this path's workspace (read it with learning_path_read_workspace_item):",
+    ...savedMaps.map((saved) => `- "${saved.title}" (saved ${saved.addedAt})`),
+    "If they revisit one, ask them to explain what they would keep, change or connect before giving feedback.",
+    "If the learner declines, continue normally. Never scrape transcripts, treat artifactNote as the full map, or make map revisiting a consolidation gate.",
+  ].join("\n");
+}
+
+export function mapRevisitBriefFor(
+  kind: ChildSessionKind,
+  nodeType: PathNode["type"],
+  artifact: ArtifactConfig,
+  enabled: boolean,
+  savedMaps: readonly SavedMapReference[] = [],
+): string[] {
+  const applies = enabled && kind === "teaching" && nodeType !== "skill" && nodeType !== "bridge" && artifact.type === "relational_map";
+  if (!applies) return [];
+  return [savedMaps.length > 0 ? mapRevisitBriefWithSaved(savedMaps) : MAP_REVISIT_BRIEF];
+}
+
 export interface ChildSessionBriefInput {
   readonly path: LearningPath;
   readonly nodeId: string;
   readonly kind: ChildSessionKind;
   readonly settings?: PluginSettings | null;
+  /** The path's workspace manifest, when one exists. Linked items enter the
+   * brief by kind and title ONLY; content stays behind the bounded read tool. */
+  readonly workspace?: WorkspaceManifest | null;
+  /** Agent-tool delivery only: never pass graph data into a learner-visible opening prompt. */
+  readonly graphPropositions?: readonly GraphNode[];
+  /** Exclude propositions recorded exclusively in this agent session. */
+  readonly currentChatId?: string;
   /** Optional override for the loose priming hook; a loose suggestion either way. */
   readonly primingHook?: string;
 }
@@ -355,6 +404,24 @@ export function buildChildSessionBrief(input: ChildSessionBriefInput): ChildSess
     'Respect "none" if the learner prefers conversation-only, and do not present the artifact as a gate.',
   ];
 
+  const graphLines = input.settings?.graphContextEnabled === true
+    ? graphContextForNode(node, input.graphPropositions ?? [], input.currentChatId)
+    : [];
+
+  // Titles only: the brief stays small no matter how much material accumulates,
+  // and learner writing never reaches the model without the bounded read tool.
+  const workspaceItems = (input.workspace?.items ?? []).filter((item) =>
+    item.links.some((link) => link.to === nodeId),
+  );
+  const workspaceLines =
+    workspaceItems.length === 0
+      ? ["No learner workspace material is linked to this node."]
+      : [
+        "The learner filed this material under this node (kind and title only; read an item before referring to it):",
+        ...workspaceItems.map((item) => `- ${item.kind}: ${item.title}`),
+        `Use learning_path_read_workspace_item to read one item in bounded chunks before referring to it.`,
+      ];
+
   const text = [
     "# Learning Path child session brief",
     `You are opening a ${kind} session for one node of the learner's learning path "${path.title}".`,
@@ -374,6 +441,9 @@ export function buildChildSessionBrief(input: ChildSessionBriefInput): ChildSess
     node.lightPreReading ??
       "No pre-reading pointer is set for this node. If orientation would help, suggest one short self-directed skim; never make it a requirement.",
     "",
+    "## Learner workspace material",
+    ...workspaceLines,
+    "",
     "## Loose micro-priming (recommended, never a gate)",
     input.primingHook ?? microPrimingHookFor(node.type),
     "Treat this as one possible hook: offer it once, accept a skip immediately, and move on to the node's goal.",
@@ -388,6 +458,7 @@ export function buildChildSessionBrief(input: ChildSessionBriefInput): ChildSess
     "## Generative artifact",
     ...artifactLines,
     "",
+    ...(graphLines.length === 0 ? [] : [...graphLines, ""]),
     "## Reporting back",
     "Use learning_path_update_progress as understanding consolidates, learning_path_log_error for each diagnosed root cause, and learning_path_suggest_pivot only when a topic is not sticking for a specific reason.",
     "Never restructure the path yourself; the learner decides.",

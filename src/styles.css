@@ -8,7 +8,7 @@
 }
 
 .lp-hub {
-  display: flex;
+  display: flex; /* the floating inspector is viewport-fixed, not anchored here */
   flex-direction: column;
   gap: 20px;
   min-width: 0;
@@ -113,7 +113,7 @@
 
 .lp-hub-body {
   display: grid;
-  grid-template-columns: minmax(15rem, 0.85fr) minmax(20rem, 1.5fr) minmax(17rem, 1fr);
+  grid-template-columns: minmax(24rem, 1.2fr) minmax(20rem, 1fr);
   gap: 18px;
   align-items: start;
   min-width: 0;
@@ -121,31 +121,366 @@
 
 @media (max-width: 1100px) {
   .lp-hub-body {
-    grid-template-columns: minmax(15rem, 1fr) minmax(20rem, 1.4fr);
-  }
-
-  .lp-inspector-pane {
-    grid-column: 1 / -1;
-  }
-}
-
-@media (max-width: 760px) {
-  .lp-hub-body {
     grid-template-columns: minmax(0, 1fr);
   }
-
-  .lp-inspector-pane {
-    grid-column: auto;
-  }
 }
 
-.lp-tree-pane,
+/* With the Architect pane hidden, the path roadmap spans the section. */
+.lp-hub-body-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* The detailed view floats over the hub's right half, pinned to the top of
+ * the learner's viewport (top, left and width are set from measured rects,
+ * so it hangs under the header while that is on screen and sits flush at the
+ * viewport top once scrolled past): it never takes the full window height,
+ * and casts its own shadow over the roadmap it overlays. The declared top
+ * and right are only fallbacks until the first measurement lands. The frame
+ * itself never scrolls — an inner scroller owns the overflow — so the drag
+ * grip can hug the frame's left edge without scrolling with the content. */
+.lp-inspector-pane {
+  position: fixed;
+  top: 12px;
+  right: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: calc(50% - 10px);
+  max-height: min(72vh, 44rem);
+  border: 1px solid var(--border, #e4e4e7);
+  border-radius: 10px;
+  background: var(--card, var(--background));
+  box-shadow: 0 24px 48px rgb(0 0 0 / 28%), 0 6px 16px rgb(0 0 0 / 14%);
+  z-index: 40;
+}
+
+/* Expanded: the window fills the viewport below the headers — the bottom edge
+ * is pinned by this class while JavaScript keeps the top edge on the same
+ * measured pin the floating window uses (below our own header while it is
+ * on screen, below the host's standing view chrome wherever the view
+ * scrolls), so the scroller (and the ledger tree inside it) stretches to
+ * the full height and the window's bar never tucks under any header. The
+ * grip disappears (there is nothing left to drag — Restore brings the
+ * previous width back); `top` here is the zero-rect fallback (jsdom,
+ * unattached hosts). */
+.lp-inspector-pane.lp-inspector-expanded {
+  top: 12px;
+  bottom: 12px;
+  max-height: none;
+}
+
+.lp-inspector-pane.lp-inspector-expanded .lp-inspector-grip {
+  display: none;
+}
+
+.lp-inspector-pane[hidden] {
+  display: none;
+}
+
+/* The scroller is the frame's one flex child: it fills whatever height the
+ * frame has (content-sized while floating, viewport-pinned when expanded) and
+ * inherits the frame's height cap so the overflow stays inside, under the
+ * sticky title bar. */
+.lp-inspector-scroll {
+  box-sizing: border-box;
+  flex: 1;
+  min-height: 0;
+  max-height: inherit;
+  overflow-y: auto;
+  padding: clamp(10px, 1.5vw, 16px);
+}
+
+/* Drag grip on the window's left edge (right edge is anchored to the hub):
+ * a slim visible pill on hover/active, half inside the frame border. */
+.lp-inspector-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -6px;
+  width: 14px;
+  cursor: ew-resize;
+  touch-action: none;
+  z-index: 3;
+}
+
+.lp-inspector-grip::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 50%;
+  width: 3px;
+  height: 44px;
+  border-radius: 999px;
+  transform: translateY(-50%);
+  background: var(--border, #e4e4e7);
+}
+
+.lp-inspector-grip:hover::after,
+.lp-inspector-grip:active::after {
+  background: var(--muted-foreground, #a1a1aa);
+}
+
+.lp-inspector-bar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 8px;
+  padding: 0 0 6px;
+  background: var(--card, var(--background));
+  z-index: 1;
+  max-height: 4rem;
+  transition: max-height 160ms ease, padding 160ms ease, opacity 160ms ease;
+  /* The bar's empty space is the window's move handle (its tabs, buttons
+     and grip keep their own cursors); touch drags move the window, never
+     the page behind it. */
+  cursor: grab;
+  touch-action: none;
+}
+
+.lp-inspector-bar:active {
+  cursor: grabbing;
+}
+
+/* The bar's left side is a tab row: Node details and the workspace ledger
+ * are two views of one floating window. Tabs are plain DOM buttons — the
+ * bar sits inside a repositioned floating window, where host widgets have
+ * historically miscalculated hit targets. */
+.lp-inspector-tabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  min-width: 0;
+}
+
+.lp-tab {
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px 6px 0 0;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  color: var(--muted-foreground, var(--foreground));
+  background: transparent;
+  white-space: nowrap;
+}
+
+.lp-tab:focus-visible {
+  outline: 2px solid var(--ring, #6366f1);
+  outline-offset: 1px;
+}
+
+.lp-tab[aria-pressed="true"] {
+  color: var(--foreground);
+  border-bottom-color: var(--primary, #6366f1);
+}
+
+.lp-inspector-bar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+/* Hidden while scrolling down: the bar collapses out of the way instead of
+ * squatting over the details; scrolling up brings it back. */
+.lp-inspector-bar.lp-inspector-bar-hidden {
+  max-height: 0;
+  padding-bottom: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* The workspace ledger is the second tab of the floating details window: it
+ * shares the window's scroller, so it never floats on its own and never
+ * stacks underneath anything — exactly the treatment the details get. */
+.lp-workspace-body {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lp-workspace-body[hidden] {
+  display: none;
+}
+
+/* A dropped document is filing material: the armed state reads as "you can let
+   go here", not as an inbox or a dropzone decoration. Only the filing strip
+   below arms (and takes the drop); the pane's list, the viewer and the path
+   surfaces behind the floating pane never do. */
+.lp-workspace-dropzone {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border, #d4d4d8);
+  border-radius: 8px;
+  /* The harness's own white — the copy and the glyph read in the same tone
+     as the surrounding text and the kind icons, not as muted chrome. The
+     armed state below repaints the whole strip in the primary. */
+  color: var(--foreground);
+}
+
+/* The "select from computer" picker owns the strip's right end; the glyph and
+   the copy fill the left. */
+.lp-workspace-dropzone .lp-button-host {
+  margin-left: auto;
+}
+
+.lp-workspace-dropzone-icon {
+  display: inline-flex;
+}
+
+.lp-workspace-dropzone-icon svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.lp-workspace-dropzone-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lp-workspace-dropzone.lp-drop-target {
+  border-color: var(--primary, #6366f1);
+  border-style: solid;
+  color: var(--primary, #6366f1);
+  background: color-mix(in srgb, var(--primary, #6366f1) 6%, transparent);
+}
+
+/* Item kinds read as icons; the hover tooltip (title) carries the word. */
+.lp-kind-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  /* The harness's own white — the same tone the surrounding text reads in,
+     so a kind reads as part of the ledger, not as muted chrome. */
+  color: var(--foreground);
+  cursor: default;
+}
+
+.lp-kind-icon svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.lp-workspace-source-status {
+  margin: 0;
+}
+
+.lp-workspace-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 8px;
+}
+
+/* The ledger tree's host: the host tree owns rows, columns, keyboard
+ * navigation and virtualization; the pane only supplies controlled rows. */
+.lp-workspace-list {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.lp-workspace-row-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The expanded row preview: the note body renders read-only in place, under
+ * its row, and the pane column scrolls with the page — no inner scroll cap. */
+.lp-workspace-preview {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lp-workspace-preview p:first-child {
+  margin-top: 0;
+}
+
+.lp-workspace-preview p:last-child {
+  margin-bottom: 0;
+}
+
+/* Node picker (add-note dialog and links dialog): a scrollable checkbox list,
+ * the one filing surface for multi-node links. */
+.lp-workspace-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 14rem;
+  overflow-y: auto;
+  padding: 4px 2px;
+}
+
+.lp-workspace-picker-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.lp-workspace-note-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: min(28rem, 80vw);
+}
+
+.lp-workspace-links-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: min(24rem, 80vw);
+}
+
+.lp-workspace-note-body {
+  min-height: 10rem;
+  font-family: var(--mono, ui-monospace, monospace);
+}
+
+/* The details tab's content div: one of the window's two tab contents. */
+.lp-inspector-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.lp-inspector-content[hidden] {
+  display: none;
+}
+
+.lp-path-pane,
 .lp-architect,
 .lp-inspector {
   min-width: 0;
 }
 
-.lp-tree-pane,
+.lp-path-pane,
 .lp-architect {
   display: flex;
   flex-direction: column;
@@ -186,29 +521,7 @@
   line-height: 1.5;
 }
 
-/* Tree -------------------------------------------------------------------- */
-
-.lp-tree-host {
-  min-width: 0;
-  overflow-x: auto;
-}
-
-.lp-tree-node {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.lp-tree-node-labels {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 6px;
-}
-
-.lp-tree-node-title {
-  font-weight: 550;
-}
+/* Badges ------------------------------------------------------------------- */
 
 .lp-badge-row {
   display: inline-flex;
@@ -222,15 +535,394 @@
   align-items: center;
 }
 
-.lp-tree-chat {
+/* Native DOM buttons inside the workspace pane (host widgets break when the
+ * pane toggles into fullscreen fixed positioning, so these use plain CSS). */
+.lp-btn {
   display: inline-flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 4px 8px;
+  justify-content: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  color: var(--foreground);
+  background: var(--background);
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+  white-space: nowrap;
 }
 
-.lp-tree-chat-label {
+.lp-btn:focus-visible {
+  outline: 2px solid var(--ring, #6366f1);
+  outline-offset: 2px;
+}
+
+.lp-btn-default {
+  background: var(--primary, #6366f1);
+  border-color: var(--primary, #6366f1);
+  color: #fff;
+}
+
+.lp-btn-default:hover {
+  background: color-mix(in srgb, var(--primary, #6366f1) 90%, #000);
+}
+
+.lp-btn-outline {
+  border-color: var(--border, #d4d4d8);
+  background: transparent;
+}
+
+.lp-btn-outline:hover {
+  background: var(--muted, rgba(127, 127, 127, 0.08));
+  border-color: var(--muted-foreground, #a1a1aa);
+}
+
+.lp-btn-ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted-foreground, #71717a);
+}
+
+.lp-btn-ghost:hover {
+  background: var(--muted, rgba(127, 127, 127, 0.08));
+  color: var(--foreground);
+}
+
+.lp-btn-link {
+  border-color: transparent;
+  background: transparent;
+  padding: 2px 0;
+  color: var(--primary, #6366f1);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.lp-btn-link:hover {
+  text-decoration-thickness: 2px;
+}
+
+.lp-btn-secondary {
+  background: var(--muted, rgba(127, 127, 127, 0.12));
+  border-color: var(--border, #e4e4e7);
+}
+
+.lp-btn-sm {
+  padding: 4px 10px;
+  font-size: 0.7rem;
+}
+
+/* Icon-only native buttons: the label lives on aria-label and the hover
+ * title; the glyph is lucide-style line art in the button's own color. */
+.lp-btn-icon {
+  padding: 4px 7px;
+}
+
+.lp-btn-icon svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.lp-btn-xs {
+  padding: 2px 6px;
+  font-size: 0.7rem;
+}
+
+/* Node cards: the roadmap lanes' one card pattern -------------------------- */
+
+.lp-node-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  padding: 10px 12px;
+  border: 1px solid var(--border, #e4e4e7);
+  border-radius: 10px;
+  background: var(--card, var(--background));
+  color: var(--foreground);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lp-node-card:hover {
+  border-color: var(--chart-1, #6366f1);
+}
+
+.lp-node-card:focus-visible {
+  outline: 2px solid var(--chart-1, #6366f1);
+  outline-offset: 1px;
+}
+
+.lp-node-card-selected {
+  border-color: var(--chart-1, #6366f1);
+  box-shadow: inset 0 0 0 1px var(--chart-1, #6366f1);
+}
+
+.lp-node-card-title {
+  font-weight: 650;
+}
+
+.lp-node-card-badges {
+  flex-wrap: wrap;
+}
+
+.lp-node-card-anchor {
+  font-size: 0.78rem;
   color: var(--muted-foreground, var(--foreground));
+}
+
+/* Roadmap lanes ------------------------------------------------------------ */
+
+.lp-roadmap-host {
+  display: flex;
+  flex-direction: column;
+}
+
+.lp-roadmap-host[hidden] {
+  display: none;
+}
+
+.lp-roadmap {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.lp-lane {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lp-lane-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.lp-lane-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+}
+
+.lp-lane-goal {
+  flex: 1 1 12rem;
+  margin: 0;
+  color: var(--muted-foreground, var(--foreground));
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.lp-lane-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.lp-roadmap-card {
+  width: min(16rem, 100%);
+}
+
+/* Paths overview ----------------------------------------------------------- */
+
+.lp-overview-pane {
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border, #e4e4e7);
+}
+
+.lp-overview-pane[hidden] {
+  display: none;
+}
+
+.lp-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lp-overview-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 10px 12px;
+}
+
+.lp-overview-search {
+  flex: 1 1 16rem;
+  max-width: 22rem;
+}
+
+.lp-search-input {
+  min-width: 0;
+}
+
+.lp-overview-filter {
+  align-self: flex-end;
+  max-width: 18rem;
+}
+
+.lp-overview-sort {
+  align-self: flex-end;
+  max-width: 14rem;
+}
+
+.lp-overview-count {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted-foreground, var(--foreground));
+}
+
+.lp-overview-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.lp-overview-pager-status {
+  font-size: 0.85rem;
+}
+
+.lp-overview-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(20rem, 100%), 1fr));
+  gap: 12px;
+}
+
+.lp-path-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border, #e4e4e7);
+  border-radius: 10px;
+  background: var(--card, var(--background));
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+/* Host buttons render labels on one line; inside a card every text must wrap. */
+.lp-path-card-header button {
+  min-width: 0;
+  white-space: normal;
+  text-align: left;
+}
+
+.lp-path-card-selected {
+  border-color: var(--chart-1, #6366f1);
+  box-shadow: inset 0 0 0 1px var(--chart-1, #6366f1);
+}
+
+.lp-path-card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 10px;
+}
+
+.lp-path-card-goal {
+  margin: 0;
+  color: var(--muted-foreground, var(--foreground));
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Filing lives at the card's foot: the tag glyph hugs the bottom edge,
+   beside whatever filing the card already shows. */
+.lp-path-card-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px 8px;
+  margin-top: auto;
+  padding-top: 2px;
+}
+
+.lp-distribution {
+  display: flex;
+  gap: 2px;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.lp-distribution-segment {
+  min-width: 2px;
+}
+
+.lp-distribution-consolidated {
+  background: var(--chart-4, #10b981);
+}
+
+.lp-distribution-in_progress {
+  background: var(--chart-3, #f59e0b);
+}
+
+.lp-distribution-unstarted {
+  background: var(--border, #e4e4e7);
+}
+
+.lp-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+
+.lp-tag {
+  padding: 2px 10px;
+  border: 1px solid var(--border, #e4e4e7);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  color: var(--muted-foreground, var(--foreground));
+}
+
+.lp-tags-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: min(26rem, 80vw);
+  padding: 2px 2px 6px;
+}
+
+.lp-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border, #e4e4e7);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+}
+
+.lp-input:focus-visible {
+  outline: 2px solid var(--chart-1, #6366f1);
+  outline-offset: 1px;
 }
 
 /* Architect --------------------------------------------------------------- */

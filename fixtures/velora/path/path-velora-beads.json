@@ -1,0 +1,190 @@
+{
+  "schemaVersion": 1,
+  "revision": 0,
+  "path": {
+    "id": "path-velora-beads",
+    "title": "Velora bead system: transfers, pulses and reachability",
+    "goal": "Build a first-principles model of the synthetic Velora bead system. Reason about the two sealed chambers, transfers that move one existing bead, creation pulses that add one new bead, the combined bead total, and which states transfers alone can reach.",
+    "createdAt": "2026-01-15T10:00:00.000Z",
+    "updatedAt": "2026-01-15T10:00:00.000Z",
+    "sourceSpine": {
+      "mode": "canonical",
+      "references": [
+        {
+          "title": "The Velora bead system (synthetic test fixture)",
+          "author": "Learning Paths test fixture",
+          "edition": "1",
+          "kind": "specification"
+        }
+      ]
+    },
+    "artifactDefault": "relational_map",
+    "modules": [
+      {
+        "id": "module-velora-operations",
+        "title": "Operations and the combined bead total",
+        "goal": "Describe Velora states, transfers and creation pulses, then use the combined bead total to distinguish them.",
+        "nodes": [
+          {
+            "id": "n-velora-holistic",
+            "type": "holistic",
+            "title": "Velora's two chambers, transfers and creation pulses",
+            "goal": "Build an end-to-end picture of the Velora bead system: two sealed chambers, a transfer that moves one existing bead, a creation pulse that adds one new bead, and the combined bead total T = L + R that travels through every operation.",
+            "sourceAnchor": {
+              "reference": "The Velora bead system (synthetic test fixture)",
+              "chapter": "1",
+              "section": "1.1",
+              "pages": "1"
+            },
+            "lightPreReading": "Skim the two operation definitions in the Velora fixture note before starting.",
+            "interleavesNodeIds": [],
+            "progression": "unstarted",
+            "artifactConfig": {
+              "type": "relational_map",
+              "instructions": "Draw the operations and the quantities they change before explaining the system."
+            },
+            "childSessions": [],
+            "errors": [],
+            "pivotSuggestions": []
+          },
+          {
+            "id": "n-velora-transfer",
+            "type": "concept",
+            "title": "Transfers preserve the combined bead total",
+            "goal": "Explain why moving an existing bead between the two Velora chambers leaves the combined bead total L + R unchanged.",
+            "sourceAnchor": {
+              "reference": "The Velora bead system (synthetic test fixture)",
+              "chapter": "1",
+              "section": "1.2"
+            },
+            "interleavesNodeIds": ["n-velora-holistic"],
+            "progression": "unstarted",
+            "artifactConfig": {
+              "type": "derivation_trace"
+            },
+            "childSessions": [],
+            "errors": [],
+            "pivotSuggestions": []
+          },
+          {
+            "id": "n-velora-pulse",
+            "type": "concept",
+            "title": "Creation pulses raise the combined bead total by one",
+            "goal": "Explain why adding one new bead to the left Velora chamber raises the combined bead total by exactly one while leaving the right count unchanged.",
+            "sourceAnchor": {
+              "reference": "The Velora bead system (synthetic test fixture)",
+              "chapter": "1",
+              "section": "1.3"
+            },
+            "interleavesNodeIds": ["n-velora-transfer"],
+            "progression": "unstarted",
+            "artifactConfig": {
+              "type": "derivation_trace"
+            },
+            "childSessions": [],
+            "errors": [],
+            "pivotSuggestions": []
+          },
+          {
+            "id": "n-velora-contrast",
+            "type": "contrast",
+            "title": "Transfer versus creation pulse: same left count, different total",
+            "goal": "Distinguish a right-to-left transfer from a creation pulse when both raise the left chamber count by one, using the combined bead total rather than the left count alone.",
+            "sourceAnchor": {
+              "reference": "The Velora bead system (synthetic test fixture)",
+              "chapter": "1",
+              "section": "1.4"
+            },
+            "interleavesNodeIds": ["n-velora-transfer", "n-velora-pulse"],
+            "progression": "unstarted",
+            "artifactConfig": {
+              "type": "relational_map",
+              "instructions": "Make a contrast map that places the transfer and the creation pulse side by side."
+            },
+            "childSessions": [],
+            "errors": [],
+            "pivotSuggestions": []
+          },
+          {
+            "id": "n-velora-detect",
+            "type": "concept",
+            "title": "Detecting a creation pulse from the combined total",
+            "goal": "Use the combined bead total to decide whether a change between two Velora states must have included at least one creation pulse.",
+            "sourceAnchor": {
+              "reference": "The Velora bead system (synthetic test fixture)",
+              "chapter": "1",
+              "section": "1.5"
+            },
+            "interleavesNodeIds": ["n-velora-transfer", "n-velora-pulse"],
+            "progression": "unstarted",
+            "artifactConfig": {
+              "type": "encoding_exercise"
+            },
+            "childSessions": [],
+            "errors": [],
+            "pivotSuggestions": []
+          }
+        ]
+      },
+      {
+        "id": "module-velora-reachability",
+        "title": "Reachability and synthesis",
+        "goal": "Decide which states transfers alone can reach, then implement and test the decision procedure.",
+        "nodes": [
+          {
+            "id": "n-velora-bridge",
+            "type": "bridge",
+            "title": "Bridge: invariant reasoning",
+            "goal": "Connect Velora's combined-total invariant to the general idea of an invariant: a quantity whose value is preserved by every allowed operation.",
+            "sourceAnchor": {
+              "reference": "The Velora bead system (synthetic test fixture)",
+              "chapter": "2",
+              "section": "2.1"
+            },
+            "interleavesNodeIds": ["n-velora-transfer", "n-velora-pulse"],
+            "progression": "unstarted",
+            "childSessions": [],
+            "errors": [],
+            "pivotSuggestions": []
+          },
+          {
+            "id": "n-velora-reachability",
+            "type": "checkpoint",
+            "title": "Reachability checkpoint: transfers alone (unlabelled)",
+            "goal": "Given two Velora states, decide whether transfers alone can connect them by comparing the combined totals and the possible left counts.",
+            "sourceAnchor": {
+              "reference": "The Velora bead system (synthetic test fixture)",
+              "chapter": "2",
+              "section": "2.2"
+            },
+            "interleavesNodeIds": ["n-velora-transfer", "n-velora-contrast", "n-velora-detect"],
+            "progression": "unstarted",
+            "childSessions": [],
+            "errors": [],
+            "pivotSuggestions": []
+          },
+          {
+            "id": "n-velora-skill",
+            "type": "skill",
+            "title": "Implement a Velora reachability checker",
+            "goal": "Write a small checker that decides whether two Velora states are connected by transfers alone, and validate it against a brute-force search on small states.",
+            "sourceAnchor": {
+              "reference": "The Velora bead system (synthetic test fixture)",
+              "chapter": "2",
+              "section": "2.3"
+            },
+            "interleavesNodeIds": ["n-velora-reachability"],
+            "progression": "unstarted",
+            "artifactConfig": {
+              "type": "micro_code",
+              "instructions": "Keep the implementation small enough to test against exhaustive search."
+            },
+            "childSessions": [],
+            "errors": [],
+            "pivotSuggestions": []
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { PluginToolRenderProps } from "learnharness-plugin-api";
 import { registerLearningPathToolRenderers } from "../src/view/tool-renderers.ts";
-import { LEARNING_PATH_TOOL_NAMES } from "../src/tool-names.ts";
+import { GRAPH_SEARCH_TOOL_NAME, LEARNING_PATH_TOOL_NAMES } from "../src/tool-names.ts";
 import { createViewFixture } from "./view-host.ts";
 
 function props(
@@ -30,7 +30,7 @@ test("registers a compact renderer for every learning_path tool", () => {
     const dispose = registerLearningPathToolRenderers(fixture.context);
     assert.deepEqual(
       [...fixture.toolRenderers.keys()].sort(),
-      [...LEARNING_PATH_TOOL_NAMES].sort(),
+      [...LEARNING_PATH_TOOL_NAMES, GRAPH_SEARCH_TOOL_NAME].sort(),
     );
     dispose();
     assert.equal(fixture.toolRenderers.size, 0);
@@ -80,6 +80,15 @@ test("renders brief, progress, error and pivot results as short readable cards",
         },
         expected: /Advisory bridge node: Repair prerequisite.*Pending; the path was not changed/s,
       },
+      {
+        toolName: "learning_path_save_artifact",
+        output: {
+          nodeTitle: "Node n-concept",
+          itemTitle: "My concurrency map",
+          characterCount: 512,
+        },
+        expected: /Saved artifact: My concurrency map.*512 characters.*Node n-concept/s,
+      },
     ];
 
     for (const entry of cases) {
@@ -125,4 +134,20 @@ test("shows streaming and error states without model HTML", () => {
   } finally {
     fixture.restore();
   }
+});
+
+test("graph search card never reveals retrieved statements or raw tool text", () => {
+  const fixture = createViewFixture();
+  try {
+    registerLearningPathToolRenderers(fixture.context);
+    const renderer = fixture.toolRenderers.get("learning_path_search_graph");
+    assert.ok(renderer);
+    const container = fixture.root.ownerDocument.createElement("div");
+    renderer.mount(container, props("learning_path_search_graph", {
+      output: { propositions: [{ id: "p1", statement: "PRIVATE CONNECTION" }] },
+      result: { content: [{ type: "text", text: "PRIVATE CONNECTION" }] } as PluginToolRenderProps["result"],
+    }));
+    assert.match(container.textContent ?? "", /Prior graph context searched/);
+    assert.doesNotMatch(container.textContent ?? "", /PRIVATE CONNECTION/);
+  } finally { fixture.restore(); }
 });

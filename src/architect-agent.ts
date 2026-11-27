@@ -272,6 +272,25 @@ export function normalizeDraftArguments(args: unknown): unknown {
   return healed ?? value;
 }
 
+/** The Architect's view of a path's node-linked workspace material: kind and
+ * title only, plus the sourceId of source items so the existing chunked
+ * `read_uploaded_source_chunk` tool reads them. Content never leaves the store
+ * through this listing — the Architect gains no whole-document read. */
+function workspaceOutline(store: LearningPathStore, pathId: string): Record<string, unknown> | null {
+  const items = (store.workspace(pathId)?.items ?? []).filter((item) =>
+    item.links.some((link) => link.to !== "space"),
+  );
+  if (items.length === 0) return null;
+  return {
+    items: items.map((item) => ({
+      kind: item.kind,
+      title: item.title,
+      ...(item.sourceId === undefined ? {} : { sourceId: item.sourceId }),
+      linkedTo: item.links.filter((link) => link.to !== "space").map((link) => link.to),
+    })),
+  };
+}
+
 /** Compact, id-bearing view of a path: exactly what refinement must echo back. */
 function pathOutline(path: LearningPath): Record<string, unknown> {
   return {
@@ -365,6 +384,8 @@ function getLearningPathTool(
     description:
       "Read the current outline of a learning path, including path, module and node ids. " +
       "Call this before refining a path: save_learning_path must echo every existing module and node id. " +
+      "The outline lists the learner's node-linked workspace material by kind and title only; read a " +
+      "source item with read_uploaded_source_chunk using its sourceId. " +
       "Without id, returns the path most recently saved by this conversation, or the list of paths.",
     parameters: objectSchema({
       id: { type: "string", description: "Path id; omit for this conversation's path." },
@@ -389,7 +410,8 @@ function getLearningPathTool(
         }
         return textResult({ paths: known }, JSON.stringify({ paths: known }));
       }
-      const outline = pathOutline(path);
+      const workspace = workspaceOutline(options.store, path.id);
+      const outline = { ...pathOutline(path), ...(workspace === null ? {} : { workspace }) };
       return textResult({ path: outline }, JSON.stringify(outline));
     },
   };

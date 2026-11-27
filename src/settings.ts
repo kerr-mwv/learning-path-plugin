@@ -37,6 +37,8 @@ import type {
   ThinkingLevelName,
 } from "./domain.ts";
 import { EVENT_PATHS_CHANGED, EVENT_SETTINGS_CHANGED } from "./topics.ts";
+import { triggerBrowserDownload } from "./export.ts";
+import type { ExportedLearningPath, ExportFormat } from "./export.ts";
 import { NODE_TYPE_LABELS, artifactLabel } from "./view/labels.ts";
 
 interface PathSummary {
@@ -144,6 +146,24 @@ export function mountSettingsPage(
   }
   artifactsSection.append(catalogDetails);
 
+  const graphSection = section(
+    document,
+    root,
+    "Graph-informed tutoring (experimental)",
+    "Off by default. Read-only graph context is available only to linked teaching and practice agents; it never changes the path or claims mastery.",
+  );
+  const graphHost = element(document, "div", "lp-settings-rows");
+  graphSection.append(graphHost);
+
+  const mapSection = section(
+    document,
+    root,
+    "Learner-first map revisiting (experimental)",
+    "Off by default. For relational-map teaching sessions, the learner makes the current map first and may optionally supply an earlier map for review afterward.",
+  );
+  const mapHost = element(document, "div", "lp-settings-rows");
+  mapSection.append(mapHost);
+
   const architectSection = section(
     document,
     root,
@@ -167,6 +187,10 @@ export function mountSettingsPage(
   let overrideDraft: ArchitectPreferences | null = null;
   let summaries: readonly PathSummary[] = [];
   let artifactRows: PluginWidgetHandle<PluginSettingsSchema> | null = null;
+  let graphRows: PluginWidgetHandle<PluginSettingsSchema> | null = null;
+  let graphSaving = false;
+  let mapRows: PluginWidgetHandle<PluginSettingsSchema> | null = null;
+  let mapSaving = false;
   let architectHandles: PluginWidgetHandle<unknown>[] = [];
   let pathHandles: PluginWidgetHandle<unknown>[] = [];
   const dialogs: PluginWidgetHandle<PluginDialogProps>[] = [];
@@ -233,6 +257,60 @@ export function mountSettingsPage(
     const rows = artifactRowsFor(settings);
     if (artifactRows) artifactRows.update({ rows });
     else artifactRows = ctx.ui.mountSettingsRows(artifactRowsHost, { rows }, { signal });
+  }
+
+  function renderGraphRows(): void {
+    if (disposed || signal.aborted) return;
+    const rows: PluginSettingsRow[] = [{
+      key: "graph-context-enabled",
+      type: "toggle",
+      label: "Use graph context for teaching and practice",
+      description: "Choose better questions from prior knowledge; reveal connections only after the learner's attempt. No graph content appears in the path UI.",
+      value: settings.graphContextEnabled === true,
+      disabled: graphSaving || mapSaving,
+      onChange: async (value: boolean) => {
+        if (graphSaving || mapSaving) return;
+        graphSaving = true;
+        renderGraphRows();
+        renderMapRows();
+        try {
+          await saveSettings({ ...settings, graphContextEnabled: value });
+        } finally {
+          graphSaving = false;
+          renderGraphRows();
+          renderMapRows();
+        }
+      },
+    }];
+    if (graphRows) graphRows.update({ rows });
+    else graphRows = ctx.ui.mountSettingsRows(graphHost, { rows }, { signal });
+  }
+
+  function renderMapRows(): void {
+    if (disposed || signal.aborted) return;
+    const rows: PluginSettingsRow[] = [{
+      key: "map-revisit-enabled",
+      type: "toggle",
+      label: "Offer learner-first earlier-map revisits",
+      description: "Only linked Teacher sessions with relational-map artifacts; decline or missing maps continue normally.",
+      value: settings.mapRevisitEnabled === true,
+      disabled: graphSaving || mapSaving,
+      onChange: async (value: boolean) => {
+        if (graphSaving || mapSaving) return;
+        mapSaving = true;
+        renderMapRows();
+        renderGraphRows();
+        try {
+          await saveSettings({ ...settings, mapRevisitEnabled: value });
+        } finally {
+          mapSaving = false;
+          renderMapRows();
+          renderGraphRows();
+        }
+      },
+    }];
+    if (mapRows) mapRows.update({ rows });
+    else mapRows = ctx.ui.mountSettingsRows(mapHost, { rows }, { signal });
   }
 
   function preferences(): ArchitectPreferences {
@@ -456,6 +534,25 @@ export function mountSettingsPage(
     dialogs.push(dialog);
   }
 
+  async function exportPath(summary: PathSummary, format: ExportFormat): Promise<void> {
+    if (disposed || signal.aborted) return;
+    try {
+      const exported = await ctx.call<ExportedLearningPath>("paths.export", {
+        pathId: summary.id,
+        format,
+      });
+      if (disposed || signal.aborted) return;
+      triggerBrowserDownload(document, exported);
+      setStatus(
+        `Exported "${summary.title}" as ${format === "json" ? "JSON" : "Markdown"} (${exported.filename}).`,
+        "info",
+      );
+    } catch (problem) {
+      if (disposed || signal.aborted) return;
+      setStatus(`Could not export "${summary.title}": ${errorMessage(problem)}`, "error");
+    }
+  }
+
   function renderPaths(): void {
     if (disposed || signal.aborted) return;
     clearPaths();
@@ -487,6 +584,34 @@ export function mountSettingsPage(
       item.append(text);
       const actions = element(document, "span", "lp-settings-path-actions");
       item.append(actions);
+      const jsonHost = element(document, "span", "lp-button-host");
+      actions.append(jsonHost);
+      pathHandles.push(
+        ctx.ui.mountButton(
+          jsonHost,
+          {
+            label: "Export JSON",
+            variant: "outline",
+            size: "xs",
+            onClick: () => void exportPath(summary, "json"),
+          },
+          { signal },
+        ),
+      );
+      const markdownHost = element(document, "span", "lp-button-host");
+      actions.append(markdownHost);
+      pathHandles.push(
+        ctx.ui.mountButton(
+          markdownHost,
+          {
+            label: "Export Markdown",
+            variant: "outline",
+            size: "xs",
+            onClick: () => void exportPath(summary, "markdown"),
+          },
+          { signal },
+        ),
+      );
       const host = element(document, "span", "lp-button-host");
       actions.append(host);
       pathHandles.push(
@@ -518,13 +643,13 @@ export function mountSettingsPage(
     } catch (problem) {
       if (disposed || signal.aborted) return false;
       setStatus(`Could not save settings: ${errorMessage(problem)}`, "error");
-      // Restore the controlled widgets to the last accepted record.
       renderArtifactRows();
+      renderGraphRows();
+      renderMapRows();
       renderArchitect();
       return false;
     }
   }
-
   function showSaved(saved: PluginSettings, modelPending = false): void {
     settings = saved;
     setStatus(
@@ -533,6 +658,8 @@ export function mountSettingsPage(
         : "Settings saved.",
     );
     renderArtifactRows();
+    renderGraphRows();
+    renderMapRows();
     renderArchitect();
   }
 
@@ -549,6 +676,8 @@ export function mountSettingsPage(
       overrideDraft = null;
       summaries = [...(pathsResult.paths ?? [])];
       renderArtifactRows();
+      renderGraphRows();
+      renderMapRows();
       renderArchitect();
       renderPaths();
       setStatus(null);
@@ -583,6 +712,10 @@ export function mountSettingsPage(
     clearPaths();
     artifactRows?.dispose();
     artifactRows = null;
+    graphRows?.dispose();
+    graphRows = null;
+    mapRows?.dispose();
+    mapRows = null;
     root.remove();
   };
 }

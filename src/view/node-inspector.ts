@@ -28,6 +28,7 @@ import type { ChildSessionKind } from "../domain.ts";
 import type { SessionStatus } from "../session-types.ts";
 import { createErrorLedger } from "./error-ledger.ts";
 import type { ErrorLedgerChange } from "./error-ledger.ts";
+
 import { createPivotBanner } from "./pivot-banner.ts";
 import type { PivotDecision } from "./pivot-banner.ts";
 import {
@@ -117,7 +118,6 @@ export function createNodeInspector(
     update: options.updateError,
     selectNode: options.selectNode,
   });
-
   let handles: PluginWidgetHandle<unknown>[] = [];
   let disposed = false;
 
@@ -163,7 +163,7 @@ export function createNodeInspector(
       document,
       "p",
       "lp-muted",
-      "Select a node in the path tree to see its source anchor, pre-reading and artifact.",
+      "Select a node in the path graph to see its source anchor, pre-reading and artifact.",
     );
     root.append(heading, hint);
   };
@@ -314,13 +314,13 @@ export function createNodeInspector(
     const chatActions = element(document, "div", "lp-chat-actions");
     button(chatActions, "Start Teaching Chat", () => {
       void options.startSession("teaching");
-    }, { variant: "default" });
+    }, { variant: "default", size: "sm" });
     button(chatActions, "Start Practice Chat", () => {
       void options.startSession("practice");
-    }, { variant: "outline" });
+    }, { variant: "outline", size: "sm" });
     button(chatActions, "Link Existing Session…", () => {
       void options.linkExistingSession();
-    }, { variant: "ghost" });
+    }, { variant: "ghost", size: "sm" });
     chats.append(chatActions);
 
     if (node.childSessions.length === 0) {
@@ -406,6 +406,7 @@ export function createNodeInspector(
       }
       chats.append(list);
     }
+
   };
 
   return {

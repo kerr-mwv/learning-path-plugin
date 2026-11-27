@@ -6,7 +6,7 @@
  * falls back to readable text rather than model HTML.
  */
 import type { PluginFrontendContext, PluginToolRenderer, PluginToolRenderProps } from "learnharness-plugin-api";
-import { LEARNING_PATH_TOOL_NAMES } from "../tool-names.ts";
+import { GRAPH_SEARCH_TOOL_NAME, LEARNING_PATH_TOOL_NAMES } from "../tool-names.ts";
 import type { ErrorCategory, PivotProposalType } from "../domain.ts";
 import { ERROR_CATEGORY_LABELS } from "./labels.ts";
 
@@ -35,6 +35,8 @@ function summary(tool: PluginToolRenderProps): { headline: string; detail?: stri
   const output = record(tool.output);
   const nodeTitle = text(output.nodeTitle) ?? "this node";
   switch (tool.toolName) {
+    case GRAPH_SEARCH_TOOL_NAME:
+      return { headline: "Prior graph context searched", detail: "Read-only context for choosing questions." };
     case "learning_path_get_brief": {
       const watchpoints = Array.isArray(output.watchpoints) ? output.watchpoints.length : 0;
       const artifact = record(output.artifact);
@@ -70,6 +72,22 @@ function summary(tool: PluginToolRenderProps): { headline: string; detail?: stri
       return {
         headline: `Advisory ${label}: ${title}`,
         detail: "Pending; the path was not changed. The learner decides.",
+      };
+    }
+    case "learning_path_save_artifact": {
+      const title = text(output.itemTitle) ?? text(output.title) ?? "produced artifact";
+      const characters = number(output.characterCount);
+      return {
+        headline: `Saved artifact: ${title}`,
+        detail: characters > 0 ? `${characters} characters · linked to ${nodeTitle}` : `Linked to ${nodeTitle}`,
+      };
+    }
+    case "learning_path_read_workspace_item": {
+      const title = text(output.title) ?? "workspace item";
+      const total = number(output.totalCharacters);
+      return {
+        headline: `Read workspace item: ${title}`,
+        detail: total > 0 ? `${output.chunkStart ?? 0}–${output.chunkEnd ?? 0} of ${total} characters` : undefined,
       };
     }
     default:
@@ -117,11 +135,16 @@ function rendererFor(toolName: string): PluginToolRenderer {
       } else {
         headline.textContent = {
           "learning_path_get_brief": "Reading the Learning Path brief",
+          [GRAPH_SEARCH_TOOL_NAME]: "Searching prior graph context",
           "learning_path_update_progress": "Recording node progress",
           "learning_path_log_error": "Logging a cognitive error",
           "learning_path_suggest_pivot": "Recording an advisory pivot",
+          "learning_path_read_workspace_item": "Reading learner workspace material",
+          "learning_path_save_artifact": "Saving the produced artifact",
         }[toolName] ?? toolName;
-        const pending = fallbackText(tool);
+        const pending = toolName === GRAPH_SEARCH_TOOL_NAME
+          ? (tool.state === "output-error" ? "The graph search could not complete." : "Preparing…")
+          : fallbackText(tool);
         if (pending) detail.textContent = pending;
       }
 
@@ -129,7 +152,9 @@ function rendererFor(toolName: string): PluginToolRenderer {
         card.dataset.error = "true";
         const error = document.createElement("span");
         error.className = "lp-tool-error";
-        error.textContent = fallbackText(tool) ?? "The tool failed.";
+        error.textContent = toolName === GRAPH_SEARCH_TOOL_NAME
+          ? "The graph search could not complete."
+          : fallbackText(tool) ?? "The tool failed.";
         detail.textContent = "";
         line.append(dot, headline);
         card.append(line, error);
@@ -145,9 +170,9 @@ function rendererFor(toolName: string): PluginToolRenderer {
   };
 }
 
-/** Register all four renderers; the returned disposer unregisters and unmounts. */
+/** Compact renderers suppress raw graph context in the normal chat transcript. */
 export function registerLearningPathToolRenderers(ctx: PluginFrontendContext): () => void {
-  const disposers = LEARNING_PATH_TOOL_NAMES.map((toolName) =>
+  const disposers = [...LEARNING_PATH_TOOL_NAMES, GRAPH_SEARCH_TOOL_NAME].map((toolName) =>
     ctx.registerToolRenderer(rendererFor(toolName)),
   );
   return () => {

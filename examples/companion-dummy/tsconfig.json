@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "learnharness-plugin-api": ["../../.sdk/index.d.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}

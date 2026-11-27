@@ -29,7 +29,8 @@ import type {
   PluginUiContent,
   PluginView,
 } from "learnharness-plugin-api";
-import type { ChildSessionKind, ChildSessionLink, LearningPath, PluginSettings } from "../src/domain.ts";
+import type { ChildSessionKind, ChildSessionLink, LearningPath, PluginSettings, ProgressionState, WorkspaceItem, WorkspaceManifest } from "../src/domain.ts";
+import { exportLearningPath } from "../src/export.ts";
 import { buildChildSessionBrief } from "../src/framework.ts";
 import { resolvePivotSuggestion, updateErrorEntry } from "../src/session-links.ts";
 import type { PathSummary } from "../src/view/path-hub.ts";
@@ -102,14 +103,31 @@ export interface ViewFixture {
 }
 
 function summarize(path: LearningPath): PathSummary {
+  const nodes = path.modules.flatMap((module) => module.nodes);
+  const nodeStates: Record<ProgressionState, number> = {
+    unstarted: 0,
+    in_progress: 0,
+    consolidated: 0,
+  };
+  for (const node of nodes) nodeStates[node.progression] += 1;
+  const spine = path.sourceSpine;
   return {
     id: path.id,
     title: path.title,
     goal: path.goal,
     updatedAt: path.updatedAt,
     moduleCount: path.modules.length,
-    nodeCount: path.modules.reduce((total, module) => total + module.nodes.length, 0),
-    sourceMode: path.sourceSpine.mode,
+    nodeCount: nodes.length,
+    sourceMode: spine.mode,
+    sourceTitles:
+      spine.mode === "canonical"
+        ? spine.references.map((reference) => reference.title)
+        : spine.sources.map((source) => source.name),
+    nodeStates,
+    pendingPivotCount: nodes.flatMap((node) => node.pivotSuggestions).filter((pivot) => pivot.status === "pending").length,
+    unresolvedErrorCount: nodes.flatMap((node) => node.errors).filter((error) => !error.resolved).length,
+    tags: path.tags ?? [],
+    folder: path.folder ?? null,
     architectChatId: path.architectChatId ?? null,
   };
 }
@@ -134,10 +152,15 @@ export function makeConversation(
 }
 
 function renderTreeContent(record: MountRecord): void {
+  // Cells mount like row content, keyed per column: a host that renders
+  // columns attaches each cell under its own mount point.
   const visible = new Map<string, PluginUiContent>();
   const visit = (rows: readonly PluginTreeRow[]) => {
     for (const row of rows) {
-      if (typeof row.content !== "string") visible.set(row.key, row.content);
+      if (typeof row.content !== "string") visible.set(`${row.key}:content`, row.content);
+      for (const [key, cell] of Object.entries(row.cells ?? {})) {
+        if (typeof cell !== "string") visible.set(`${row.key}:${key}`, cell);
+      }
       if (row.children && (!row.disclosure || row.disclosure.expanded)) visit(row.children);
     }
   };
@@ -192,6 +215,9 @@ export interface FixtureOptions {
   conversations?: readonly PluginAgentSnapshot[];
   nativeChats?: readonly NativeChatFixture[];
   settings?: PluginSettings;
+  /** Initial workspace items for the first fixture path, content verbatim; a
+   * null content marks a source, which references the global library. */
+  workspaceItems?: readonly { item: WorkspaceItem; content: string | null }[];
 }
 
 export function createViewFixture(options: FixtureOptions = {}): ViewFixture {
@@ -215,6 +241,12 @@ export function createViewFixture(options: FixtureOptions = {}): ViewFixture {
   const paths = new Map<string, LearningPath>();
   for (const path of options.paths ?? []) paths.set(path.id, structuredClone(path));
   let settingsState: PluginSettings = options.settings ?? { artifactDefaults: {} };
+  // The in-memory workspace of the first fixture path: manifest rows plus the
+  // content each row's file carries, mirroring the store's index/files split.
+  const workspacePathId = options.paths?.[0]?.id ?? null;
+  const workspaceItems: { item: WorkspaceItem; content: string | null }[] = (
+    options.workspaceItems ?? []
+  ).map((entry) => structuredClone(entry));
   // A fixture path normally points at live chats; tests delete one to model a
   // deleted native session instead of every fixture starting "missing".
   for (const path of paths.values()) {
@@ -414,6 +446,16 @@ export function createViewFixture(options: FixtureOptions = {}): ViewFixture {
         const found = paths.get(value.id);
         return Promise.resolve({ path: found ? structuredClone(found) : null } as T);
       }
+      case "paths.export": {
+        const pathId = String(value.pathId ?? value.id ?? "");
+        const format = value.format;
+        if (format !== "json" && format !== "markdown") {
+          return Promise.reject(new Error('format must be "json" or "markdown".'));
+        }
+        const found = paths.get(pathId);
+        if (!found) return Promise.reject(new Error(`Unknown path: ${pathId}`));
+        return Promise.resolve(exportLearningPath(found, format, settingsState) as T);
+      }
       case "paths.updateNode": {
         const found = paths.get(value.pathId);
         if (!found) return Promise.reject(new Error(`Unknown path: ${String(value.pathId)}`));
@@ -442,6 +484,40 @@ export function createViewFixture(options: FixtureOptions = {}): ViewFixture {
           ...found,
           updatedAt: "2026-02-01T00:00:00.000Z",
           modules,
+        };
+        paths.set(updated.id, updated);
+        return Promise.resolve({ path: structuredClone(updated) } as T);
+      }
+      case "paths.updateMeta": {
+        const found = paths.get(value.pathId);
+        if (!found) return Promise.reject(new Error(`Unknown path: ${String(value.pathId)}`));
+        if (!Array.isArray(value.tags)) {
+          return Promise.reject(new Error("tags must be an array."));
+        }
+        let folder = found.folder;
+        if (value.folder !== undefined) {
+          if (value.folder === null || value.folder === "") {
+            folder = undefined;
+          } else if (typeof value.folder !== "string") {
+            return Promise.reject(new Error("folder must be a string or null."));
+          } else {
+            folder = value.folder;
+          }
+        }
+        const { tags: _previous, folder: _previousFolder, ...withoutFiling } = found;
+        const tags: string[] = value.tags.map(String);
+        const seen = new Set<string>();
+        for (const tag of tags) {
+          if (seen.has(tag.toLowerCase())) {
+            return Promise.reject(new Error(`duplicate tag "${tag}"`));
+          }
+          seen.add(tag.toLowerCase());
+        }
+        const updated: LearningPath = {
+          ...withoutFiling,
+          updatedAt: "2026-02-01T00:00:00.000Z",
+          ...(tags.length === 0 ? {} : { tags }),
+          ...(folder === undefined ? {} : { folder }),
         };
         paths.set(updated.id, updated);
         return Promise.resolve({ path: structuredClone(updated) } as T);
@@ -717,6 +793,131 @@ export function createViewFixture(options: FixtureOptions = {}): ViewFixture {
           deduplicated: false,
         } as T);
       }
+      case "workspace.list":
+      case "workspace.resync": {
+        if (String(value.pathId) !== workspacePathId) {
+          return Promise.reject(new Error(`Unknown path: ${String(value.pathId)}`));
+        }
+        const manifest: WorkspaceManifest | null =
+          workspaceItems.length === 0
+            ? null
+            : {
+                schemaVersion: 1,
+                pathId: workspacePathId!,
+                updatedAt: "2026-02-01T00:00:00.000Z",
+                items: workspaceItems.map((entry) => structuredClone(entry.item)),
+              };
+        return Promise.resolve({ workspace: manifest, changed: false } as T);
+      }
+      case "workspace.saveNote": {
+        if (String(value.pathId) !== workspacePathId) {
+          return Promise.reject(new Error(`Unknown path: ${String(value.pathId)}`));
+        }
+        const item: WorkspaceItem = {
+          id: randomUUID(),
+          kind: "note",
+          title: String(value.title),
+          addedAt: "2026-02-01T00:00:00.000Z",
+          addedBy: "learner",
+          links: Array.isArray(value.links)
+            ? (structuredClone(value.links) as WorkspaceItem["links"])
+            : value.nodeId === undefined || value.nodeId === null
+              ? []
+              : [
+                  {
+                    to: String(value.nodeId),
+                    rel: String(value.rel ?? "informs") as WorkspaceItem["links"][number]["rel"],
+                  },
+                ],
+        };
+        workspaceItems.push({ item, content: String(value.markdown) });
+        return Promise.resolve({ item: structuredClone(item) } as T);
+      }
+      case "workspace.saveSource": {
+        if (String(value.pathId) !== workspacePathId) {
+          return Promise.reject(new Error(`Unknown path: ${String(value.pathId)}`));
+        }
+        uploaded.push({ name: String(value.name), markdown: String(value.markdown) });
+        const sourceId = `source-${uploaded.length}`;
+        const item: WorkspaceItem = {
+          id: randomUUID(),
+          kind: "source",
+          title: String(value.title ?? value.name),
+          sourceId,
+          addedAt: "2026-02-01T00:00:00.000Z",
+          addedBy: "learner",
+          links: Array.isArray(value.links)
+            ? (structuredClone(value.links) as WorkspaceItem["links"])
+            : [],
+        };
+        // A source item references the global library: no content file.
+        workspaceItems.push({ item, content: null });
+        return Promise.resolve({
+          item: structuredClone(item),
+          reference: { sourceId, name: String(value.name) },
+          deduplicated: false,
+          alreadyFiled: false,
+        } as T);
+      }
+      case "workspace.readItem": {
+        if (String(value.pathId) !== workspacePathId) {
+          return Promise.reject(new Error(`Unknown path: ${String(value.pathId)}`));
+        }
+        const entry = workspaceItems.find((candidate) => candidate.item.id === String(value.itemId));
+        if (!entry) {
+          return Promise.reject(new Error(`Unknown workspace item: ${String(value.itemId)}`));
+        }
+        return Promise.resolve({
+          item: structuredClone(entry.item),
+          content: entry.item.kind === "source" ? null : entry.content,
+        } as T);
+      }
+      case "workspace.updateItemMeta": {
+        const index = workspaceItems.findIndex((entry) => entry.item.id === String(value.itemId));
+        if (index === -1) {
+          return Promise.reject(new Error(`Unknown workspace item: ${String(value.itemId)}`));
+        }
+        const current = structuredClone(workspaceItems[index]!.item);
+        const { caption: previousCaption, ...kept } = current;
+        const updated: WorkspaceItem = {
+          ...kept,
+          ...(value.title === undefined ? {} : { title: String(value.title) }),
+          ...(value.caption === undefined || value.caption === null
+            ? {}
+            : { caption: String(value.caption) }),
+          ...(value.links === undefined ? {} : { links: structuredClone(value.links) }),
+        };
+        workspaceItems[index] = { item: updated, content: workspaceItems[index]!.content };
+        return Promise.resolve({ item: structuredClone(updated) } as T);
+      }
+      case "workspace.deleteItem": {
+        const index = workspaceItems.findIndex((entry) => entry.item.id === String(value.itemId));
+        if (index !== -1) workspaceItems.splice(index, 1);
+        return Promise.resolve({ deleted: index !== -1 } as T);
+      }
+      case "workspace.openDirectory": {
+        if (String(value.pathId) !== workspacePathId) {
+          return Promise.reject(new Error(`Unknown path: ${String(value.pathId)}`));
+        }
+        return Promise.resolve({ directory: `/tmp/learning-path/${String(value.pathId)}/workspaces` } as T);
+      }
+      case "workspace.openItem": {
+        if (String(value.pathId) !== workspacePathId) {
+          return Promise.reject(new Error(`Unknown path: ${String(value.pathId)}`));
+        }
+        const entry = workspaceItems.find((candidate) => candidate.item.id === String(value.itemId));
+        if (!entry) {
+          return Promise.reject(new Error(`Unknown workspace item: ${String(value.itemId)}`));
+        }
+        if (entry.item.kind === "source") {
+          return Promise.reject(
+            new Error(`The workspace item carries no content file to open: ${String(value.itemId)}`),
+          );
+        }
+        return Promise.resolve({
+          file: `/tmp/learning-path/${String(value.pathId)}/files/${String(value.itemId)}.md`,
+        } as T);
+      }
       default:
         return Promise.reject(new Error(`Unexpected operation: ${name}`));
     }
@@ -875,6 +1076,20 @@ export function fire(element: HTMLElement, type: string): void {
   const event = element.ownerDocument.createEvent("Event");
   event.initEvent(type, true, false);
   element.dispatchEvent(event);
+}
+
+/** The roadmap card for one node: the path pane's real `<button>`. */
+export function roadmapCard(root: HTMLElement, nodeId: string): HTMLElement {
+  const card = root.querySelector<HTMLElement>(`.lp-roadmap-card[data-node-id="${nodeId}"]`);
+  assert.ok(card, `Missing roadmap card ${nodeId}`);
+  return card;
+}
+
+/** Click a roadmap card, the learner's route into the shared inspector. */
+export function selectRoadmapCard(root: HTMLElement, nodeId: string): HTMLElement {
+  const card = roadmapCard(root, nodeId);
+  fire(card, "click");
+  return card;
 }
 
 export function setSelect(select: HTMLSelectElement, value: string): void {
