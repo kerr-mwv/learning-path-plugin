@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+      - experimental
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Package release artifacts
+        run: |
+          mkdir -p release
+          cp dist/main.js dist/styles.css dist/manifest.json README.md release/
+          cp -r docs release/ 2>/dev/null || true
+          cd release
+          zip -r ../release.zip .
+
+      - name: Release (Experimental)
+        if: github.ref == 'refs/heads/experimental'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./manifest.json').version")
+          SHORT_SHA=${GITHUB_SHA::7}
+          TAG="experimental"
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" \
+            --title "Experimental v${VERSION}+${SHORT_SHA}" \
+            --notes "Automated experimental build from commit ${SHORT_SHA}." \
+            --prerelease \
+            release.zip
+
+      - name: Release (Stable)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./manifest.json').version")
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --notes "Release v${VERSION}" \
+            release.zip
