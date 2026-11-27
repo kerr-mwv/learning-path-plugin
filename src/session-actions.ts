@@ -1,25 +1,26 @@
-/** Learning Path — session top-bar actions.
+/** Learning Path — the single native session action.
  *
- * Two registered actions, each explicitly placed on native teaching and practice
- * top bars:
- * - "Open Parent Learning Path" resolves the native chat to its Path Node,
- *   hands the node to the Path Hub and navigates there;
- * - "Attach Session to Path…" opens a dialog that links the current chat to a
- *   learner-chosen node.
- *
- * Registration alone creates no chrome; placement is explicit. The host owns
- * busy/error handling, so `run` rejects honestly instead of hiding failures.
+ * The host exposes one top-bar placement per action, so the plugin keeps the
+ * chrome compact and puts parent navigation, attachment, and lesson handoff
+ * choices in one plugin-owned dialog. The host supplies a fresh session view
+ * snapshot for each invocation; readiness is deliberately only a heuristic.
  */
 import type { PluginActionContext, PluginFrontendContext } from "learnharness-plugin-api";
 import { createSessionLauncher } from "./session-launcher.ts";
 import type { SessionLauncher } from "./session-launcher.ts";
-import { requestPathHubTarget } from "./session-navigation.ts";
-import type { SessionParentResult } from "./session-types.ts";
-import { openAttachSessionDialog } from "./view/session-dialogs.ts";
+import { openLearningPathMenuDialog } from "./view/session-dialogs.ts";
 
 export interface SessionActionOptions {
   /** Injectable launcher; production creates one bound to the activation. */
   readonly launcher?: SessionLauncher;
+}
+
+function likelyReadyForPath(context: PluginActionContext): boolean {
+  return context.surface === "session" &&
+    context.kind === "teaching" &&
+    !context.view.busy &&
+    context.view.status === "ready" &&
+    context.view.phase === "teach";
 }
 
 export function registerSessionActions(
@@ -31,45 +32,15 @@ export function registerSessionActions(
 
   disposers.push(
     ctx.registerAction({
-      id: "lp-open-parent-learning-path",
-      name: "Open Parent Learning Path",
+      id: "lp-learning-path",
+      name: "Learning Path",
       run: async (context: PluginActionContext) => {
         if (context.surface !== "session") return;
-        let parent: SessionParentResult["link"] = null;
-        try {
-          const result = await ctx.call<SessionParentResult>("sessions.forChat", {
-            chatId: context.sessionId,
-          });
-          parent = result.link;
-        } catch {
-          // A missing/unlinked chat still opens the hub, where the learner can attach it.
-        }
-        if (parent) {
-          requestPathHubTarget({ pathId: parent.pathId, nodeId: parent.nodeId });
-        }
-        ctx.app.openView("paths");
-      },
-    }),
-  );
-  disposers.push(
-    ctx.placeAction({
-      id: "lp-open-parent-top-bar",
-      actionId: "lp-open-parent-learning-path",
-      location: "top-bar",
-      sessions: ["teaching", "practice"],
-    }),
-  );
-
-  disposers.push(
-    ctx.registerAction({
-      id: "lp-attach-session-to-path",
-      name: "Attach Session to Path…",
-      run: async (context: PluginActionContext) => {
-        if (context.surface !== "session") return;
-        openAttachSessionDialog(ctx, {
+        openLearningPathMenuDialog(ctx, {
           launcher,
           chatId: context.sessionId,
           kind: context.kind,
+          likelyReady: likelyReadyForPath(context),
           signal: ctx.signal,
         });
       },
@@ -77,8 +48,8 @@ export function registerSessionActions(
   );
   disposers.push(
     ctx.placeAction({
-      id: "lp-attach-session-top-bar",
-      actionId: "lp-attach-session-to-path",
+      id: "lp-learning-path-top-bar",
+      actionId: "lp-learning-path",
       location: "top-bar",
       sessions: ["teaching", "practice"],
     }),

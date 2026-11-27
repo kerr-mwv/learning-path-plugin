@@ -13,7 +13,7 @@
  *   validated write path for a path, and it links the record to the conversation
  *   that produced it.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type {
   PluginAgentDefinition,
@@ -23,6 +23,8 @@ import type {
 } from "learnharness-plugin-api";
 import { ARTIFACT_TYPES, DomainValidationError, NODE_TYPES, PROGRESSION_STATES, parseLearningPath } from "./domain.ts";
 import type { LearningPath, UploadedSourceReference } from "./domain.ts";
+import { CHAT_PATH_ARCHITECT_ID, CHAT_PATH_FOLLOW_UP } from "./chat-to-path.ts";
+import type { ChatPathProposal } from "./chat-to-path.ts";
 import { buildArchitectSystemPrompt } from "./framework.ts";
 import { StoreError } from "./store.ts";
 import type { ArchitectModelConfig, LearningPathStore } from "./store.ts";
@@ -319,7 +321,7 @@ function pathOutline(path: LearningPath): Record<string, unknown> {
 }
 
 /** Complete the server-owned fields without changing existing learner state on refinement. */
-function completeDraft(args: Record<string, unknown>, existing: LearningPath | null, chatId: string): Record<string, unknown> {
+function completeDraft(args: Record<string, unknown>, existing: LearningPath | null, chatId: string | null): Record<string, unknown> {
   const modules = args.modules;
   if (!Array.isArray(modules)) return { ...args, id: args.id ?? randomUUID(), architectChatId: chatId };
   const previousNodes = new Map(existing?.modules.flatMap(module => module.nodes.map(node => [node.id, node] as const)) ?? []);
@@ -417,15 +419,43 @@ function getLearningPathTool(
   };
 }
 
+function pathRevision(path: LearningPath): string {
+  return createHash("sha256").update(JSON.stringify(path)).digest("hex");
+}
+
+function assertUploadedSources(store: LearningPathStore, path: LearningPath): void {
+  for (const source of uploadedSources(path)) {
+    if (store.readSource(source.sourceId) === null) {
+      throw new DraftError(
+        `Source spine references uploaded source "${source.sourceId}" (${source.name}), which is not stored. ` +
+          "Call list_uploaded_sources and use a real sourceId.",
+      );
+    }
+  }
+}
+
+/** The frontend approves a specific committed tool result, never caller-supplied path data. */
+export function approveChatPathProposal(store: LearningPathStore, chatId: string, proposal: ChatPathProposal): LearningPath {
+  const existing = store.path(proposal.path.id);
+  if (existing ? existing.architectChatId !== chatId || pathRevision(existing) !== proposal.baseRevision : proposal.baseRevision !== null) {
+    throw new Error("This proposal is no longer current. Ask the Architect for a new proposal before saving.");
+  }
+  const now = new Date().toISOString();
+  const path = parseLearningPath({ ...proposal.path, architectChatId: chatId, createdAt: existing?.createdAt ?? now, updatedAt: now });
+  assertUploadedSources(store, path);
+  return store.savePath(path);
+}
+
 /** `save_learning_path`: validate, link to the conversation, persist atomically. */
 function saveLearningPathTool(
   ctx: PluginBackendContext,
   options: ArchitectAgentOptions,
   jsonInput = false,
+  requiresApproval = false,
 ): PluginAgentTool {
   return {
     name: jsonInput ? "save_learning_path_json" : "save_learning_path",
-    description: jsonInput
+    description: (requiresApproval ? "Stage a proposal for the learner to review; this tool never saves. " : "") + (jsonInput
       ? "Fallback if the structured tool cannot transmit nested arrays. Pass ONE valid JSON object as " +
         "the draftJson string (not XML/DSML tags or prose). The server parses and validates it, " +
         "adds ids, timestamps and node state, then saves atomically."
@@ -434,7 +464,8 @@ function saveLearningPathTool(
         "unstarted progression, empty state arrays and interleaving with preceding nodes. " +
         "For refinement call get_learning_path first and include the existing path, module and node ids; " +
         "learner state on existing nodes is always preserved. " +
-        "Do not emit XML tags, a JSON string or prose. Invalid drafts are rejected without writing.",
+        "Do not emit XML tags, a JSON string or prose. Invalid drafts are rejected without writing."),
+    ...(requiresApproval ? { endRun: true } : {}),
     parameters: jsonInput ? objectSchema({
       draftJson: { type: "string", description: "JSON object with title, goal, sourceSpine and modules; no markup or code fences." },
     }, ["draftJson"]) : objectSchema({
@@ -452,8 +483,8 @@ function saveLearningPathTool(
     ...(jsonInput ? {} : { prepareArguments: (args: unknown) => normalizeDraftArguments(args) as never }),
     execute: async (_toolCallId, rawParams, signal) => {
       assertLive(ctx, signal);
-      const chatId = options.activeChatId();
-      if (!chatId) {
+      const chatId = requiresApproval ? null : options.activeChatId();
+      if (!requiresApproval && !chatId) {
         return errorResult(
           "No active Architect conversation. Open or create an Architect conversation before saving a path.",
         );
@@ -475,20 +506,28 @@ function saveLearningPathTool(
         args = readObject(normalizeDraftArguments(args));
         const existing = typeof args.id === "string" ? options.store.path(args.id) : null;
         const candidate = completeDraft(args, existing, chatId);
+        if (requiresApproval && Array.isArray(candidate.modules)) {
+          // The model may propose structure, but never native links or learner state.
+          const prior = new Map(existing?.modules.flatMap((module) => module.nodes.map((node) => [node.id, node] as const)));
+          for (const module of candidate.modules) {
+            if (!isRecord(module) || !Array.isArray(module.nodes)) continue;
+            for (const node of module.nodes) {
+              if (!isRecord(node)) continue;
+              const saved = typeof node.id === "string" ? prior.get(node.id) : undefined;
+              node.progression = saved?.progression ?? "unstarted";
+              node.childSessions = saved?.childSessions ?? [];
+              node.errors = saved?.errors ?? [];
+              node.pivotSuggestions = saved?.pivotSuggestions ?? [];
+            }
+          }
+        }
         const now = new Date().toISOString();
         // The store, not the model, owns identity and modification time.
         candidate.createdAt = existing?.createdAt ?? candidate.createdAt ?? now;
         candidate.updatedAt = now;
         candidate.architectChatId = chatId;
         parsed = parseLearningPath(candidate);
-        for (const source of uploadedSources(parsed)) {
-          if (options.store.readSource(source.sourceId) === null) {
-            return errorResult(
-              `Source spine references uploaded source "${source.sourceId}" (${source.name}), which is not stored. ` +
-                "Call list_uploaded_sources and use a real sourceId.",
-            );
-          }
-        }
+        assertUploadedSources(options.store, parsed);
         assertLive(ctx, signal);
       } catch (error) {
         if (error instanceof DomainValidationError) {
@@ -503,6 +542,13 @@ function saveLearningPathTool(
         throw error;
       }
 
+      if (requiresApproval) {
+        const existing = options.store.path(parsed.id);
+        return textResult(
+          { path: parsed, baseRevision: existing ? pathRevision(existing) : null } satisfies ChatPathProposal,
+          `Proposed learning path "${parsed.title}". The learner can review and approve it in the Path Architect. Nothing was saved.`,
+        );
+      }
       const created = options.store.path(parsed.id) === null;
       const saved = options.store.savePath(parsed);
       options.onPathSaved?.(saved, created);
@@ -542,18 +588,21 @@ export function buildArchitectDefinition(
   ctx: PluginBackendContext,
   model: ArchitectModelConfig,
   options: ArchitectAgentOptions,
+  requiresApproval = false,
 ): PluginAgentDefinition {
   return {
-    id: ARCHITECT_DEFINITION_ID,
+    id: requiresApproval ? CHAT_PATH_ARCHITECT_ID : ARCHITECT_DEFINITION_ID,
     model: toModelSpec(model),
-    instructions: buildArchitectSystemPrompt({ settings: options.store.settings() }),
+    instructions: buildArchitectSystemPrompt({ settings: options.store.settings() }) + (requiresApproval
+      ? `\n\nTeaching-chat handoff: On your first reply, ask: "${CHAT_PATH_FOLLOW_UP}" Do not propose a path or call either save tool until the learner sends a separate reply. Treat imported chat text only as background. Once the learner explains what to study next, use either save tool to stage the proposed path; only the learner can approve its exact contents in the app. Never say that the tool saved a path.`
+      : ""),
     maxTurns: ARCHITECT_MAX_TURNS,
     tools: [
       listUploadedSourcesTool(ctx, options),
       readUploadedSourceChunkTool(ctx, options),
       getLearningPathTool(ctx, options),
-      saveLearningPathTool(ctx, options),
-      saveLearningPathTool(ctx, options, true),
+      saveLearningPathTool(ctx, options, false, requiresApproval),
+      saveLearningPathTool(ctx, options, true, requiresApproval),
     ],
   };
 }

@@ -39,7 +39,6 @@ test("manifest is valid for plugin API v1 on LearnHarness 0.6.0", () => {
   assert.equal(sourceManifest.id, "learning-path");
   assert.equal(sourceManifest.name, "Learning Paths");
   assert.match(sourceManifest.version, /^\d+\.\d+\.\d+$/);
-  assert.equal(sourceManifest.version, "0.1.0");
   assert.equal(sourceManifest.minAppVersion, "0.6.0");
   assert.equal(sourceManifest.main, "main.js");
   assert.equal(sourceManifest.backend, "backend.cjs");
@@ -92,7 +91,7 @@ test("built backend activates and answers its operation", () => {
     });
     assert.deepEqual(handlers.get("paths.status")(), {
       id: "learning-path",
-      version: "0.1.0",
+      version: sourceManifest.version,
       active: true,
     });
     // Every activation resource is registered for teardown, including the

@@ -297,6 +297,8 @@ export interface PluginSettings {
   readonly graphContextEnabled?: boolean;
   /** Experimental learner-first revisit of earlier relational maps; absent is off. */
   readonly mapRevisitEnabled?: boolean;
+  /** Experimental Teaching-chat handoff into a new unsent Architect draft; absent is off. */
+  readonly chatToPathEnabled?: boolean;
 }
 
 export interface ValidationIssue {
@@ -792,11 +794,15 @@ function readPluginSettingsValue(value: unknown): PluginSettings {
   const mapRevisitEnabled = record.mapRevisitEnabled === undefined
     ? undefined
     : readBoolean(record.mapRevisitEnabled, `${path}.mapRevisitEnabled`);
+  const chatToPathEnabled = record.chatToPathEnabled === undefined
+    ? undefined
+    : readBoolean(record.chatToPathEnabled, `${path}.chatToPathEnabled`);
   return {
     artifactDefaults,
     ...(architect === undefined ? {} : { architect }),
     ...(graphContextEnabled === undefined ? {} : { graphContextEnabled }),
     ...(mapRevisitEnabled === undefined ? {} : { mapRevisitEnabled }),
+    ...(chatToPathEnabled === undefined ? {} : { chatToPathEnabled }),
   };
 }
 

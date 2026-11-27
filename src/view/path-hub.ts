@@ -865,12 +865,20 @@ export function mountPathHub(
     }
   }
 
+  function openChatDraft(draft: string): void {
+    refineOpen = true;
+    pane.startNew(draft);
+    renderHeader();
+  }
+
   async function refreshAll(): Promise<void> {
     if (disposed || signal.aborted) return;
     const token = ++loadToken;
     // A top-bar navigation may have arrived before this mount finished loading.
     const target = consumePathHubTarget();
-    if (target) {
+    if (target?.kind === "chat-draft") openChatDraft(target.draft);
+    if (target?.kind === "node") {
+      nodeDeselected = false;
       selectedPathId = target.pathId;
       selectedNodeId = target.nodeId;
     }
@@ -1364,6 +1372,10 @@ export function mountPathHub(
   const offNavigation = subscribePathHubTarget((target) => {
     if (signal.aborted || disposed) return;
     consumePathHubTarget();
+    if (target.kind === "chat-draft") {
+      openChatDraft(target.draft);
+      return;
+    }
     nodeDeselected = false;
     if (path?.id === target.pathId) {
       selectedPathId = target.pathId;

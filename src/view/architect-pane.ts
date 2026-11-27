@@ -12,6 +12,8 @@
  */
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ArchitectProgress } from "../topics.ts";
+import { CHAT_PATH_ARCHITECT_ID, CHAT_PATH_FOLLOW_UP, reviewableChatPath } from "../chat-to-path.ts";
+import { formatSourceAnchor } from "../domain.ts";
 import type { LearningPath } from "../domain.ts";
 import type {
   PluginAgentSnapshot,
@@ -25,7 +27,7 @@ import { buildNodePicker, DOCUMENT_LINK_REL, UPLOAD_ACCEPT_TYPES } from "./works
 export interface ArchitectPane {
   readonly element: HTMLElement;
   /** Open a fresh draft so the learner can choose a model before the first send. */
-  startNew(): void;
+  startNew(initialDraft?: string): void;
   /** Re-read one conversation snapshot after a notification or resync. */
   load(conversationId: string): Promise<void>;
   /** Apply a change notification: when the committed history is unchanged
@@ -131,6 +133,9 @@ export function createArchitectPane(
     "Describe your goal and background. A source is optional; you can also upload a PDF or text. The Architect will propose a path.");
   log.append(history, live, emptyChat);
   root.append(log);
+  const reviewSection = element(document, "section", "lp-session-dialog");
+  reviewSection.hidden = true;
+  root.append(reviewSection);
 
   const uploadRow = element(document, "div", "lp-upload-row");
   const uploadHost = element(document, "span", "lp-button-host");
@@ -170,6 +175,10 @@ export function createArchitectPane(
   let disposed = false;
   let loadVersion = 0;
   let newDraft = false;
+  let chatHandoffDraft = false;
+  let approving = false;
+  let approvedToolCall: string | null = null;
+  let reviewButton: PluginWidgetHandle<unknown> | null = null;
   /** Which affordance opened the native file picker: sources (the default
    * corpus flow) or the workspace filing flow. */
   let uploadMode: "sources" | "workspace" = "sources";
@@ -206,7 +215,7 @@ export function createArchitectPane(
     { signal },
   );
 
-  const busy = (): boolean => creating || sending || conversation?.status === "running";
+  const busy = (): boolean => creating || sending || approving || conversation?.status === "running";
 
   const composerProps = (): PluginStandardComposerProps => ({
     composer: {
@@ -417,27 +426,93 @@ export function createArchitectPane(
     emptyChat.hidden = historyTurns + liveTurns > 0;
   }
 
+  function renderChatPathReview(): void {
+    reviewButton?.dispose();
+    reviewButton = null;
+    reviewSection.replaceChildren();
+    reviewSection.hidden = true;
+    if (conversation?.definitionId !== CHAT_PATH_ARCHITECT_ID || busy()) return;
+    if (conversation.messages.filter((message) => message.role === "user").length === 1) {
+      reviewSection.hidden = false;
+      reviewSection.append(element(document, "p", "lp-muted", CHAT_PATH_FOLLOW_UP));
+      return;
+    }
+    const review = reviewableChatPath(conversation);
+    if (!review || review.toolCallId === approvedToolCall) return;
+    const id = conversation.id;
+    const { path } = review.proposal;
+    reviewSection.hidden = false;
+    reviewSection.append(
+      element(document, "h3", "lp-settings-subheading", `Review proposed path: ${path.title}`),
+      element(document, "p", "lp-muted", path.goal),
+    );
+    const source = path.sourceSpine;
+    const sources = source.mode === "canonical" ? [...source.references.map((entry) => entry.title), ...(source.supplements ?? []).map((entry) => entry.name)] : source.sources.map((entry) => entry.name);
+    reviewSection.append(element(document, "p", "lp-muted", `Sources: ${sources.join(", ")}`));
+    const list = element(document, "ol");
+    for (const module of path.modules) {
+      const item = element(document, "li", undefined, module.title);
+      if (module.goal) item.append(element(document, "p", "lp-muted", module.goal));
+      const nodes = element(document, "ul");
+      for (const node of module.nodes) {
+        nodes.append(element(document, "li", undefined, `${node.title} (${node.type}): ${node.goal} — ${formatSourceAnchor(node.sourceAnchor)}`));
+      }
+      item.append(nodes);
+      list.append(item);
+    }
+    reviewSection.append(list, element(document, "p", "lp-muted", "Nothing is saved yet. Send feedback to request changes, or approve this proposal to save it."));
+    const host = element(document, "span", "lp-button-host");
+    reviewSection.append(host);
+    reviewButton = ctx.ui.mountButton(host, {
+      label: "Approve and Save Path", variant: "default", size: "sm",
+      onClick: async () => {
+        if (disposed || signal.aborted || busy() || conversation?.id !== id || reviewableChatPath(conversation)?.toolCallId !== review.toolCallId) return;
+        approving = true;
+        renderChatPathReview();
+        updateComposer();
+        try {
+          await ctx.call("architect.approveChatPath", { id, toolCallId: review.toolCallId });
+          approvedToolCall = review.toolCallId;
+          error = null;
+        } catch (problem) {
+          error = `Could not save the proposed path: ${errorMessage(problem)}`;
+        } finally {
+          approving = false;
+          if (!signal.aborted && !disposed) {
+            renderChatPathReview();
+            renderStatus();
+            updateComposer();
+          }
+        }
+      },
+    }, { signal });
+  }
+
   function setConversation(snapshot: PluginAgentSnapshot | null): void {
     if (disposed || signal.aborted) return;
     ++loadVersion;
     conversation = snapshot;
     error = null;
     renderMessages();
+    renderChatPathReview();
     renderStatus();
     updateComposer();
   }
 
-  function startNew(): void {
+  function startNew(initialDraft?: string): void {
     if (signal.aborted || disposed) return;
     if (busy()) {
-      error = "Stop the current Architect run before starting a new path.";
+      error = initialDraft === undefined
+        ? "Stop the current Architect run before starting a new path."
+        : "The Architect is busy. Stop it or wait, then reopen the Teaching-chat review to start the new draft.";
       renderStatus();
       return;
     }
     // Do not allocate a conversation until the learner has chosen the model.
     newDraft = true;
+    chatHandoffDraft = initialDraft !== undefined;
+    draft = initialDraft ?? "";
     if (conversation) {
-      draft = "";
       model = undefined;
       thinking = undefined;
     }
@@ -453,6 +528,7 @@ export function createArchitectPane(
     try {
       const result = await ctx.call<{ conversation: PluginAgentSnapshot }>("architect.create", {
         requestId: requestId(),
+        ...(chatHandoffDraft ? { origin: "teaching-chat" } : {}),
         ...(model
           ? {
               model: {
@@ -465,6 +541,7 @@ export function createArchitectPane(
       });
       if (signal.aborted || disposed) return null;
       newDraft = false;
+      chatHandoffDraft = false;
       setConversation(result.conversation);
       return result.conversation.id;
     } catch (problem) {
@@ -490,6 +567,7 @@ export function createArchitectPane(
       model = undefined;
       thinking = undefined;
       newDraft = false;
+      chatHandoffDraft = false;
       setConversation(result.conversation);
     } catch (problem) {
       if (signal.aborted || disposed || version !== loadVersion) return;
@@ -541,6 +619,7 @@ export function createArchitectPane(
     }
     if (!conversation || signal.aborted || disposed) return;
     sending = true;
+    renderChatPathReview();
     error = null;
     renderStatus();
     updateComposer();
@@ -559,12 +638,19 @@ export function createArchitectPane(
       renderStatus();
     } finally {
       sending = false;
+      if (!disposed && !signal.aborted) renderChatPathReview();
       updateComposer();
     }
   }
 
   async function discuss(text: string): Promise<void> {
     if (signal.aborted || disposed) return;
+    if (chatHandoffDraft || (conversation?.definitionId === CHAT_PATH_ARCHITECT_ID &&
+      conversation.messages.filter((message) => message.role === "user").length < 2)) {
+      error = "Finish the first two messages of this Teaching-chat handoff in the composer first.";
+      renderStatus();
+      return;
+    }
     draft = text;
     updateComposer();
     if (!conversation) {
@@ -797,6 +883,7 @@ export function createArchitectPane(
       disposed = true;
       fileInput.removeEventListener("change", onFileChange);
       clearMessages();
+      reviewButton?.dispose();
       uploadButton.dispose();
       composerHandle?.dispose();
       composerHandle = null;

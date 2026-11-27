@@ -239,6 +239,31 @@ test("experimental map revisit toggle defaults off, saves, and restores after fa
   }
 });
 
+test("chat-to-path and map revisit settings save without overwriting each other", async () => {
+  const fixture = createViewFixture();
+  try {
+    mountSettingsPage(fixture.context, fixture.root, fixture.context.signal);
+    await fixture.flush();
+    const toggle = (key: string) => artifactRow(liveRows(fixture, key), key);
+    const chatKey = "chat-to-path-enabled";
+    const mapKey = "map-revisit-enabled";
+    assert.equal(toggle(chatKey).value, false);
+
+    const saving = toggle(chatKey).onChange(true);
+    assert.equal(toggle(mapKey).disabled, true);
+    await saving;
+    assert.equal(toggle(mapKey).disabled, false);
+    await toggle(mapKey).onChange(true);
+    await fixture.flush();
+
+    assert.equal(fixture.settings.chatToPathEnabled, true);
+    assert.equal(fixture.settings.mapRevisitEnabled, true);
+    assert.equal(toggle(chatKey).value, true);
+  } finally {
+    fixture.restore();
+  }
+});
+
 test("settings page exports a path as JSON and Markdown", async () => {
   const path = makePath();
   const fixture = createViewFixture({ paths: [path] });

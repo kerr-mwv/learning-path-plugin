@@ -63,3 +63,14 @@ export interface SessionParentResult {
   readonly link: LinkedParent | null;
   readonly exists: boolean;
 }
+
+/** Only the reviewed background and the opaque revision leave the saved chat. */
+export interface ChatPathPreview {
+  readonly title: string;
+  readonly busy: boolean;
+  readonly outline: string | null;
+  readonly truncated: boolean;
+  readonly revision: string;
+}
+
+export const CHAT_PATH_SUMMARY_MAX = 1_000;
